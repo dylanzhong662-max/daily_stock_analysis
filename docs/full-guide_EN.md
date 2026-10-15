@@ -643,6 +643,17 @@ python main.py --debug                # Debug mode (verbose logging)
 python main.py --workers 5            # Specify concurrency
 ```
 
+### TradingAgents multi-agent deep research (optional)
+
+A deep-research entry that runs alongside the daily analysis: [TradingAgents](https://github.com/TauricResearch/TradingAgents) analyst team + bull/bear debate + risk review, producing a 5-tier rating (Buy / Overweight / Hold / Underweight / Sell) and a full Markdown/HTML report. Disabled by default; install the optional dependency first (Python 3.11+):
+
+```bash
+pip install -r requirements-tradingagents.txt
+TRADINGAGENTS_ENABLED=true python main.py --tradingagents AAPL,600519 --no-notify
+```
+
+The model defaults to `LITELLM_MODEL` and its API key; the API entry is `POST /api/v1/tradingagents/tasks`. See [TradingAgents integration](tradingagents-integration.md) (Chinese) for config mapping, cost and data directories.
+
 ### Use real Futu holdings as the analysis list
 
 Standard source installs (`pip install -r requirements.txt`), official Docker images, and Windows/macOS Desktop backends already include the pinned `futu-api==10.8.6808`. Install it manually from the [Futu OpenAPI SDK guide](https://openapi.futunn.com/futu-api-doc/en/intro/intro.html) only when using a reduced custom Python environment. After starting and signing in to Futu OpenD, run:

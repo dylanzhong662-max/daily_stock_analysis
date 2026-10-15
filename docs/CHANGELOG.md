@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 决策信号默认 horizon 判定：距开盘较远的盘前（如每日批量分析在美股开盘前数小时运行）不再默认标为 `intraday`，改用日线级 `3d`，使信号可被前向结果评估、且不会在数小时内过期；临近开盘的盘前与盘中/午休/尾盘仍为 `intraday`。
 - [修复] 统一等价股票代码的本地日线候选与同源窗口解析；冲突沪深交易所代码不再降级匹配裸码，回测仅接受快照或交易日历确认的起点，并在同一起点中优先完整的单一代码窗口。
 - [新功能] 新增按 individual SkillAgent 自身 signal、版本化 engine 与本地已存同源日线窗口计算并持久化 `skill_opinion_outcomes` 的核心服务；本阶段不提供管理员 API、表现统计、样本充足度或权重调整。
+- [新功能] 新增可选的 TradingAgents 多智能体深度研究入口（CLI `--tradingagents` / API `/api/v1/tradingagents/tasks`），默认关闭，依赖单独通过 `requirements-tradingagents.txt` 安装，模型默认复用 `LITELLM_MODEL`。
+
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 

@@ -706,6 +706,17 @@ python main.py --debug                # 调试模式（详细日志）
 python main.py --workers 5            # 指定并发数
 ```
 
+### TradingAgents 多智能体深度研究（可选）
+
+独立于日常分析的深度研究入口：基于 [TradingAgents](https://github.com/TauricResearch/TradingAgents) 的分析师团队 + 多空辩论 + 风控评审，输出 5 档评级（Buy / Overweight / Hold / Underweight / Sell）与完整 Markdown/HTML 报告。默认关闭，需单独安装可选依赖（Python 3.11+）：
+
+```bash
+pip install -r requirements-tradingagents.txt
+TRADINGAGENTS_ENABLED=true python main.py --tradingagents AAPL,600519 --no-notify
+```
+
+模型默认复用 `LITELLM_MODEL` 与对应 API Key，API 入口为 `POST /api/v1/tradingagents/tasks`。配置映射、费用与数据目录见 [TradingAgents 集成说明](tradingagents-integration.md)。
+
 ### Futu 真实持仓作为分析列表
 
 标准源码安装（`pip install -r requirements.txt`）、官方 Docker 镜像和 Windows/macOS Desktop backend 已默认包含锁定的 `futu-api==10.8.6808`。仅在使用裁剪过的自定义 Python 环境时，才需要按 [Futu OpenAPI SDK 安装说明](https://openapi.futunn.com/futu-api-doc/en/intro/intro.html) 手动补装。启动并登录 Futu OpenD 后运行：
