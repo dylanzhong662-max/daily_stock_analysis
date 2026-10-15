@@ -898,6 +898,14 @@ class Config:
     # === Built-in stock screening ===
     screening_enabled: bool = False
 
+    # === TradingAgents 多智能体深度研究（可选依赖，默认关闭）===
+    # 其余运行参数（辩论轮数、模型覆盖、数据目录等）直接使用 TradingAgents 原生的
+    # TRADINGAGENTS_* 环境变量，见 docs/tradingagents-integration.md。
+    tradingagents_enabled: bool = False
+    tradingagents_analysts: List[str] = field(
+        default_factory=lambda: ["market", "social", "news", "fundamentals"]
+    )
+
     # === AI 分析配置 ===
     generation_backend: str = LITELLM_BACKEND_ID
     generation_fallback_backend: str = LITELLM_BACKEND_ID
@@ -2291,6 +2299,12 @@ class Config:
             ),
             portfolio_fx_update_enabled=os.getenv('PORTFOLIO_FX_UPDATE_ENABLED', 'true').lower() == 'true',
             screening_enabled=parse_env_bool(os.getenv('SCREENING_ENABLED'), default=False),
+            tradingagents_enabled=parse_env_bool(os.getenv('TRADINGAGENTS_ENABLED'), default=False),
+            tradingagents_analysts=[
+                s.strip().lower()
+                for s in os.getenv('TRADINGAGENTS_ANALYSTS', 'market,social,news,fundamentals').split(',')
+                if s.strip()
+            ],
         )
     
     @classmethod

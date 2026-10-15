@@ -720,6 +720,17 @@ python main.py --debug                # 调试模式（详细日志）
 python main.py --workers 5            # 指定并发数
 ```
 
+### TradingAgents 多智能体深度研究（可选）
+
+独立于日常分析的深度研究入口：基于 [TradingAgents](https://github.com/TauricResearch/TradingAgents) 的分析师团队 + 多空辩论 + 风控评审，输出 5 档评级（Buy / Overweight / Hold / Underweight / Sell）与完整 Markdown/HTML 报告。默认关闭，需单独安装可选依赖（Python 3.11+）：
+
+```bash
+pip install -r requirements-tradingagents.txt
+TRADINGAGENTS_ENABLED=true python main.py --tradingagents AAPL,600519 --no-notify
+```
+
+模型默认复用 `LITELLM_MODEL` 与对应 API Key，API 入口为 `POST /api/v1/tradingagents/tasks`。配置映射、费用与数据目录见 [TradingAgents 集成说明](tradingagents-integration.md)。
+
 ### 指数一次性分析（Phase 1）
 
 `--stocks` 一次性入口支持对已登记的 SH、SZ 与 CSI 指数执行完整分析。指数目标使用 `sh`/`sz` 前缀（如 `sh000016`）或 `.CSI` alias（如 `000300.CSI`、`930955.CSI`）显式指定；裸六码（如 `000016`）始终按股票处理。

@@ -26,6 +26,7 @@ from api.v1.endpoints import (
     portfolio,
     stocks,
     system_config,
+    tradingagents,
     usage,
 )
 
@@ -103,6 +104,12 @@ router.include_router(
     screening.router,
     prefix="/screening",
     tags=["Screening"]
+)
+
+router.include_router(
+    tradingagents.router,
+    prefix="/tradingagents",
+    tags=["TradingAgents"]
 )
 
 router.include_router(

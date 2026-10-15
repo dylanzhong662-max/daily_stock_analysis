@@ -292,6 +292,7 @@ def parse_arguments() -> argparse.Namespace:
   python main.py --single-notify    # 启用单股推送模式（每分析完一只立即推送）
   python main.py --schedule         # 启用定时任务模式
   python main.py --market-review    # 仅运行大盘复盘
+  python main.py --tradingagents AAPL,600519  # TradingAgents 多智能体深度研究（需 TRADINGAGENTS_ENABLED=true）
         '''
     )
 
@@ -444,6 +445,23 @@ def parse_arguments() -> argparse.Namespace:
         '--backtest-force',
         action='store_true',
         help='强制回测（即使已有回测结果也重新计算）'
+    )
+
+    # === TradingAgents ===
+    parser.add_argument(
+        '--tradingagents',
+        type=str,
+        default=None,
+        metavar='CODES',
+        help='使用 TradingAgents 多智能体辩论对指定股票做深度研究，逗号分隔；需 TRADINGAGENTS_ENABLED=true 并安装 requirements-tradingagents.txt'
+    )
+
+    parser.add_argument(
+        '--tradingagents-date',
+        type=str,
+        default=None,
+        metavar='YYYY-MM-DD',
+        help='TradingAgents 分析日期（默认今天，不能晚于今天）'
     )
 
     return parser.parse_args()
@@ -1403,6 +1421,64 @@ def _resolve_scheduled_stock_codes(stock_codes: Optional[List[str]]) -> Optional
     return None
 
 
+def run_tradingagents_mode(
+    config: Config,
+    *,
+    codes: List[str],
+    trade_date: Optional[str] = None,
+    notify: bool = True,
+) -> int:
+    """Run TradingAgents deep research for each code; one failure does not stop the rest."""
+    from src.services.tradingagents_service import (
+        TradingAgentsError,
+        TradingAgentsService,
+        format_notification,
+    )
+
+    codes = [c.strip() for c in codes if (c or "").strip()]
+    if not codes:
+        logger.error("--tradingagents 未提供股票代码")
+        return 1
+
+    service = TradingAgentsService(config)
+    try:
+        service.ensure_ready()
+    except TradingAgentsError as exc:
+        logger.error("TradingAgents 不可用: %s", exc.message)
+        return 1
+
+    notifier = None
+    if notify:
+        from src.notification import NotificationService
+
+        notifier = NotificationService()
+        if not notifier.is_available():
+            notifier = None
+
+    failures = 0
+    for code in codes:
+        try:
+            result = service.analyze(code, trade_date=trade_date)
+        except TradingAgentsError as exc:
+            failures += 1
+            logger.error("TradingAgents 分析 %s 失败: %s", code, exc.message)
+            continue
+        except Exception as exc:
+            failures += 1
+            logger.exception("TradingAgents 分析 %s 异常: %s", code, exc)
+            continue
+
+        content = format_notification(result)
+        print(content)
+        if notifier is not None:
+            try:
+                notifier.send(content, email_stock_codes=[code])
+            except Exception as exc:
+                logger.warning("TradingAgents 结果推送失败 %s: %s", code, exc)
+
+    return 1 if failures == len(codes) else 0
+
+
 def _skips_stock_entry(args: argparse.Namespace, config: Config) -> bool:
     """Whether the active mode consumes a stock list at all.
 
@@ -1410,8 +1486,9 @@ def _skips_stock_entry(args: argparse.Namespace, config: Config) -> bool:
     ``--stocks``/``STOCK_LIST`` tokens nor refresh the stock-index registry
     before the mode dispatch, otherwise an unsupported index token would
     wrongly block a run that never consumes it. Covered modes:
-    ``--backtest``, ``--market-review``, ``--serve-only``/``--webui-only``,
-    ``--portfolio`` (any value) and ``--schedule``/``config.schedule_enabled``.
+    ``--backtest``, ``--market-review``, ``--tradingagents``,
+    ``--serve-only``/``--webui-only``, ``--portfolio`` (any value) and
+    ``--schedule``/``config.schedule_enabled``.
     ``--serve`` (not serve-only) and plain one-shot runs still consume the
     stock list and stay outside the guard. The webui-only flag is read
     directly here because the webui -> serve mapping happens only later in
@@ -1420,6 +1497,7 @@ def _skips_stock_entry(args: argparse.Namespace, config: Config) -> bool:
     return bool(
         getattr(args, "backtest", False)
         or getattr(args, "market_review", False)
+        or bool(getattr(args, "tradingagents", None))
         or getattr(args, "serve_only", False)
         or getattr(args, "webui_only", False)
         or bool(getattr(args, "portfolio", None))
@@ -1716,6 +1794,16 @@ def main() -> int:
                 f"completed={stats.get('completed')} insufficient={stats.get('insufficient')} errors={stats.get('errors')}"
             )
             return 0
+
+        # 模式0.5: TradingAgents 多智能体深度研究
+        if getattr(args, 'tradingagents', None):
+            logger.info("模式: TradingAgents 深度研究")
+            return run_tradingagents_mode(
+                config,
+                codes=split_stock_list(args.tradingagents),
+                trade_date=getattr(args, 'tradingagents_date', None),
+                notify=not args.no_notify,
+            )
 
         # 模式1: 仅大盘复盘
         if args.market_review:

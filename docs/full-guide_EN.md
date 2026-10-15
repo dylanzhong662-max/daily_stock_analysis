@@ -661,6 +661,17 @@ python main.py --debug                # Debug mode (verbose logging)
 python main.py --workers 5            # Specify concurrency
 ```
 
+### TradingAgents multi-agent deep research (optional)
+
+A deep-research entry that runs alongside the daily analysis: [TradingAgents](https://github.com/TauricResearch/TradingAgents) analyst team + bull/bear debate + risk review, producing a 5-tier rating (Buy / Overweight / Hold / Underweight / Sell) and a full Markdown/HTML report. Disabled by default; install the optional dependency first (Python 3.11+):
+
+```bash
+pip install -r requirements-tradingagents.txt
+TRADINGAGENTS_ENABLED=true python main.py --tradingagents AAPL,600519 --no-notify
+```
+
+The model defaults to `LITELLM_MODEL` and its API key; the API entry is `POST /api/v1/tradingagents/tasks`. See [TradingAgents integration](tradingagents-integration.md) (Chinese) for config mapping, cost and data directories.
+
 ### One-shot index analysis (Phase 1)
 
 The one-shot `--stocks` entry supports full analysis of registered SH, SZ, and CSI indices. Index targets are specified explicitly with an `sh`/`sz` prefix (e.g. `sh000016`) or a `.CSI` alias (e.g. `000300.CSI`, `930955.CSI`); a bare six-digit code (e.g. `000016`) is always treated as a stock.

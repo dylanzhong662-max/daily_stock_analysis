@@ -1,0 +1,4 @@
+# Optional: TradingAgents multi-agent deep research (python main.py --tradingagents ...)
+# Requires Python >= 3.11 and pulls in pandas >= 3 / langchain / langgraph.
+# See docs/tradingagents-integration.md before installing into the main environment.
+tradingagents @ git+https://github.com/TauricResearch/TradingAgents.git@v0.6.0

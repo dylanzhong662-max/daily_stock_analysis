@@ -23,6 +23,7 @@ from api.v1.endpoints import (
     alerts,
     decision_signals,
     screening,
+    tradingagents,
 )
 __all__ = [
     "health",
@@ -39,4 +40,5 @@ __all__ = [
     "alerts",
     "decision_signals",
     "screening",
+    "tradingagents",
 ]
