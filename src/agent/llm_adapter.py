@@ -8,6 +8,7 @@ interface consumed by the AgentExecutor, via LiteLLM.
 
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -34,6 +35,7 @@ from src.agent.provider_trace import (
     resolved_provider_namespace,
     trace_model_matches,
 )
+from src.agent.langfuse_observability import finish_generation, observe_generation
 from src.llm.errors import call_litellm_with_param_recovery
 from src.llm.backend_registry import (
     AUTO_AGENT_BACKEND_ID,
@@ -52,6 +54,30 @@ from src.llm.provider_cache import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _enable_langfuse_otel_callback() -> None:
+    """Optionally enable LiteLLM's raw OTEL callback.
+
+    It exports the complete messages array, including RAG/news tool results.
+    The application uses compact manual generation observations by default.
+    Set LANGFUSE_LITELLM_OTEL_ENABLED=true only for an explicitly approved,
+    short-lived debugging session.
+    """
+    if os.getenv("LANGFUSE_LITELLM_OTEL_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+    if os.getenv("LANGFUSE_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+    if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
+        logger.warning("Langfuse tracing enabled but project keys are missing")
+        return
+    callbacks = list(getattr(litellm, "callbacks", []) or [])
+    if "langfuse_otel" not in callbacks:
+        litellm.callbacks = [*callbacks, "langfuse_otel"]
+        logger.info("Langfuse OTEL tracing enabled for LiteLLM generations")
+
+
+_enable_langfuse_otel_callback()
 
 
 def _resolve_litellm_exception(name: str) -> type[BaseException]:
@@ -751,42 +777,47 @@ class LLMToolAdapter:
         register_fallback_model_pricing(
             resolve_fallback_litellm_wire_models(model, recovery_model_list)
         )
-        if use_channel_router and self._router and model in _router_model_names:
-            # Channel / YAML path: Router manages all models in its model_list
-            response = call_litellm_with_param_recovery(
-                lambda kwargs: self._router.completion(**kwargs),
-                model=model,
-                call_kwargs=call_kwargs,
-                model_list=recovery_model_list,
-                logger=logger,
-            )
-        elif self._router and model == agent_primary_model and not use_channel_router:
-            # Legacy path: Router for primary model multi-key
-            response = call_litellm_with_param_recovery(
-                lambda kwargs: self._router.completion(**kwargs),
-                model=model,
-                call_kwargs=call_kwargs,
-                model_list=recovery_model_list,
-                logger=logger,
-            )
-        else:
-            # Legacy/direct-env path: direct call (also handles direct-env
-            # providers like groq/ or bedrock/ that are not in the Router
-            # model_list even when channel mode is active)
-            response = call_litellm_with_param_recovery(
-                lambda kwargs: litellm.completion(**kwargs),
-                model=model,
-                call_kwargs=call_kwargs,
-                model_list=recovery_model_list,
-                logger=logger,
-            )
-
-        return self._parse_litellm_response(
-            response,
-            model,
-            openai_messages,
-            model_list=recovery_model_list,
-        )
+        with observe_generation(
+            model=model,
+            message_count=len(openai_messages),
+            tools_available=len(tools),
+        ) as observation:
+            try:
+                if use_channel_router and self._router and model in _router_model_names:
+                    # Channel / YAML path: Router manages all models in its model_list
+                    response = call_litellm_with_param_recovery(
+                        lambda kwargs: self._router.completion(**kwargs), model=model,
+                        call_kwargs=call_kwargs, model_list=recovery_model_list, logger=logger,
+                    )
+                elif self._router and model == agent_primary_model and not use_channel_router:
+                    # Legacy path: Router for primary model multi-key
+                    response = call_litellm_with_param_recovery(
+                        lambda kwargs: self._router.completion(**kwargs), model=model,
+                        call_kwargs=call_kwargs, model_list=recovery_model_list, logger=logger,
+                    )
+                else:
+                    # Direct path also covers direct-env providers outside Router config.
+                    response = call_litellm_with_param_recovery(
+                        lambda kwargs: litellm.completion(**kwargs), model=model,
+                        call_kwargs=call_kwargs, model_list=recovery_model_list, logger=logger,
+                    )
+                parsed = self._parse_litellm_response(
+                    response, model, openai_messages, model_list=recovery_model_list,
+                )
+                finish_generation(
+                    observation,
+                    success=True,
+                    content_length=len(parsed.content or ""),
+                    requested_tools=[tool.name for tool in parsed.tool_calls],
+                    usage=parsed.usage,
+                )
+                return parsed
+            except Exception:
+                finish_generation(
+                    observation, success=False, content_length=0, requested_tools=[],
+                    error_code="litellm_call_failed",
+                )
+                raise
 
     def _get_temperature(self) -> float:
         """Return the raw configured temperature before per-model normalization."""

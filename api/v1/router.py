@@ -25,6 +25,7 @@ from api.v1.endpoints import (
     portfolio,
     stocks,
     system_config,
+    us_screener,
     usage,
 )
 
@@ -102,6 +103,12 @@ router.include_router(
     alphasift.router,
     prefix="/alphasift",
     tags=["AlphaSift"]
+)
+
+router.include_router(
+    us_screener.router,
+    prefix="/screener",
+    tags=["UsScreener"]
 )
 
 router.include_router(

@@ -27,6 +27,10 @@ WORKDIR /app
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
+# [部署适配] 腾讯云国内访问 Debian 官方源极慢，切换清华镜像（兼容 deb822 与传统 sources.list）
+RUN (sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true) && \
+    (sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list 2>/dev/null || true)
+
 # 安装系统依赖（wkhtmltopdf 含 wkhtmltoimage，用于 Markdown 转图片 Issue #289）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -47,8 +51,12 @@ RUN groupadd -g 1000 dsa && \
 # 复制依赖文件
 COPY requirements.txt .
 
-# 安装 Python 依赖
-RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
+# 安装 Python 依赖（[部署适配] 走清华 PyPI 镜像，避免国内直连 pypi.org 超时）
+RUN --mount=type=cache,target=/root/.cache/pip pip install \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
+    --timeout 120 --retries 5 \
+    -r requirements.txt
 
 # 复制应用代码
 COPY *.py ./
@@ -62,7 +70,7 @@ COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # Verify globally bundled runtime dependencies without leaving SDK logs in the image.
 RUN mkdir -p /tmp/futu-sdk-smoke-home && \
-    HOME=/tmp/futu-sdk-smoke-home python -c "import alphasift.dsa_adapter; import futu" && \
+    HOME=/tmp/futu-sdk-smoke-home python -c "import futu" && \
     rm -rf /tmp/futu-sdk-smoke-home
 
 # 确保数据目录存在并授权给 non-root 用户

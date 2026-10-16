@@ -1576,6 +1576,11 @@ def main() -> int:
                     "name": "agent_event_monitor",
                 })
 
+            # 前向结果评估闭环（回测 / 决策信号 / 策略意见），与 RuntimeSchedulerService
+            # 复用同一构建器，保证 serve 与纯 schedule 两种模式行为一致。
+            from src.services.runtime_scheduler import build_backtest_evaluation_background_tasks
+            background_tasks.extend(build_backtest_evaluation_background_tasks(config))
+
             schedule_kwargs = {
                 "task": scheduled_task,
                 "schedule_time": config.schedule_time,

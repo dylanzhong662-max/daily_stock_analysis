@@ -9,6 +9,10 @@ import type {
   BacktestPhaseFilter,
 } from '../types/backtest';
 
+// A backtest may fill missing historical bars for many analysis records.  It
+// is a deliberate long-running server operation, not a normal UI request.
+const BACKTEST_RUN_TIMEOUT_MS = 300_000;
+
 // ============ API ============
 
 export const backtestApi = {
@@ -28,6 +32,7 @@ export const backtestApi = {
     const response = await apiClient.post<Record<string, unknown>>(
       '/api/v1/backtest/run',
       requestData,
+      { timeout: BACKTEST_RUN_TIMEOUT_MS },
     );
     return toCamelCase<BacktestRunResponse>(response.data);
   },

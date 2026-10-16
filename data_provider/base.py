@@ -627,6 +627,7 @@ class DataFetcherManager:
         "LongbridgeFetcher": {"hk", "us"},
         "FinnhubFetcher": {"us"},
         "AlphaVantageFetcher": {"us"},
+        "FmpFetcher": {"us"},
     }
     _daily_source_health = CircuitBreaker(failure_threshold=3, cooldown_seconds=300.0)
     _CONCEPT_RANKINGS_CACHE_TTL_SECONDS = 300.0
@@ -1214,6 +1215,13 @@ class DataFetcherManager:
         else:
             logger.debug("[数据源初始化] 跳过未配置的 AlphaVantageFetcher")
 
+        fmp_api_key = (getattr(config, "fmp_api_key", None) or "").strip()
+        if fmp_api_key:
+            from .fmp_fetcher import FmpFetcher
+            optional_fetchers.append(FmpFetcher())  # 美股专用（Yahoo 机房 IP 被限流时的替代源）
+        else:
+            logger.debug("[数据源初始化] 跳过未配置的 FmpFetcher")
+
         # 初始化数据源列表
         self._ensure_concurrency_guards()
         with self._fetchers_lock:
@@ -1309,12 +1317,13 @@ class DataFetcherManager:
         if is_us:
             prefer_lb = self._longbridge_preferred(capability="daily_data") and not is_us_index
             if is_us_index:
-                # 指数始终 YFinance 首选（Longbridge 不提供指数K线）
+                # 指数始终 YFinance 首选（Longbridge/FMP 走个股口径，不提供指数K线）
                 source_order = ["YfinanceFetcher", "FinnhubFetcher"]
             elif prefer_lb:
-                source_order = ["LongbridgeFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "YfinanceFetcher"]
+                source_order = ["LongbridgeFetcher", "FmpFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "YfinanceFetcher"]
             else:
-                source_order = ["FinnhubFetcher", "AlphaVantageFetcher", "YfinanceFetcher", "LongbridgeFetcher"]
+                # FMP 直连可用（Yahoo 机房 IP 429），美股个股日线优先用 FMP
+                source_order = ["FmpFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "YfinanceFetcher", "LongbridgeFetcher"]
             market_label = "美股指数" if is_us_index else "美股"
 
             for order_index, src_name in enumerate(source_order):
@@ -1786,8 +1795,17 @@ class DataFetcherManager:
         if is_us or is_hk:
             prefer_lb = self._longbridge_preferred() and not is_us_index
             if is_us:
-                primary_src = "LongbridgeFetcher" if prefer_lb else "YfinanceFetcher"
-                secondary_src = "YfinanceFetcher" if prefer_lb else "LongbridgeFetcher"
+                # FMP 对美股个股可直连（Yahoo 机房 IP 429），配置后优先作为实时行情主源
+                fmp_ready = (not is_us_index) and bool((getattr(config, "fmp_api_key", None) or "").strip())
+                if prefer_lb:
+                    primary_src = "LongbridgeFetcher"
+                    secondary_src = "FmpFetcher" if fmp_ready else "YfinanceFetcher"
+                elif fmp_ready:
+                    primary_src = "FmpFetcher"
+                    secondary_src = "YfinanceFetcher"
+                else:
+                    primary_src = "YfinanceFetcher"
+                    secondary_src = "LongbridgeFetcher"
                 market_label = "美股指数" if is_us_index else "美股"
                 primary_kw: dict = {}
                 secondary_kw: dict = {}

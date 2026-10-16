@@ -38,7 +38,9 @@ from src.agent.tools.execution import (
     _normalize_tool_stock_code,
     execute_runner_tool_call,
     serialize_tool_result,
+    redact_diagnostic_value,
 )
+from src.agent.langfuse_observability import finish_tool_call, observe_tool_call
 from src.agent.stock_scope import StockScope
 from src.llm.usage import should_persist_usage_telemetry
 from src.utils.data_processing import normalize_report_signal_attribution
@@ -617,12 +619,29 @@ def _execute_tools(
     """
 
     def _exec_single(tc_item):
-        return execute_runner_tool_call(
-            tool_call=tc_item,
-            tool_registry=tool_registry,
-            stock_scope=stock_scope,
-            non_retriable_tool_results=non_retriable_tool_results,
-        )
+        arguments_summary = redact_diagnostic_value(tc_item.arguments, limit=500)
+        with observe_tool_call(tool_name=tc_item.name, arguments_summary=arguments_summary) as observation:
+            result = execute_runner_tool_call(
+                tool_call=tc_item,
+                tool_registry=tool_registry,
+                stock_scope=stock_scope,
+                non_retriable_tool_results=non_retriable_tool_results,
+            )
+            _, result_str, success, duration, cached, guard_result = result
+            error_code = None
+            if guard_result is not None:
+                error_code = "stock_scope_violation"
+            elif not success:
+                error_code = "tool_failed"
+            finish_tool_call(
+                observation,
+                success=success,
+                duration_s=duration,
+                result_length=len(result_str),
+                cached=cached,
+                error_code=error_code,
+            )
+            return result
 
     results: List[Dict[str, Any]] = []
 

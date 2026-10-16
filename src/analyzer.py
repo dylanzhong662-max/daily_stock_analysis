@@ -3199,6 +3199,13 @@ class GeminiAnalyzer:
                     requested_temperature,
                     model_list=recovery_model_list,
                 )
+                # [部署适配] 仅对需要 JSON 的分析调用启用 provider 原生 JSON 模式，
+                # 避免 DeepSeek 等模型在 content 里夹带 markdown/解释文字导致 ambiguous_json；
+                # 按 provider 前缀限定为 deepseek / openai 兼容，其他 provider（如 anthropic）不受影响。
+                if response_validator is not None:
+                    _model_lc = (model or "").lower()
+                    if ("deepseek" in _model_lc) or _model_lc.startswith("openai/") or ("gpt" in _model_lc):
+                        call_kwargs.setdefault("response_format", {"type": "json_object"})
                 route_context = build_provider_cache_route_context(
                     model=model,
                     provider=usage_provider,

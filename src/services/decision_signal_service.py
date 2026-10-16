@@ -664,6 +664,7 @@ class DecisionSignalService:
         horizon = payload.get("horizon") or self._default_horizon(
             action=str(payload.get("action") or ""),
             market_phase=payload.get("market_phase"),
+            metadata=payload.get("metadata"),
         )
         if horizon:
             payload["horizon"] = horizon
@@ -820,7 +821,7 @@ class DecisionSignalService:
         horizon = self._normalize_optional_enum(payload.get("horizon"), HORIZONS, "horizon")
         horizon_defaulted = False
         if horizon is None:
-            horizon = self._default_horizon(action=action, market_phase=market_phase)
+            horizon = self._default_horizon(action=action, market_phase=market_phase, metadata=metadata)
             horizon_defaulted = horizon is not None and not horizon_explicit
         expires_explicit = self._payload_has_value(payload, "expires_at")
         expires_at = self._parse_datetime(payload.get("expires_at"))
@@ -878,9 +879,31 @@ class DecisionSignalService:
     def _payload_has_value(payload: Dict[str, Any], field_name: str) -> bool:
         return payload.get(field_name) not in (None, "")
 
-    @staticmethod
-    def _default_horizon(*, action: str, market_phase: Optional[str]) -> str:
-        if action == "alert" or market_phase in INTRADAY_PHASES:
+    # 距开盘在此分钟数以内的盘前信号，才算真正的开盘/日内视角；更早的盘前
+    # （例如美股在北京时间 18:00 的每日批量分析，距开盘约 4 小时）属于下一交易日
+    # 视角，必须落到可按日线评估、且不会当日过期的日线级 horizon（3d），否则前向
+    # 结果评估无法对其打分，且信号会在数小时内过期。
+    PREMARKET_INTRADAY_MINUTES_TO_OPEN = 90
+
+    @classmethod
+    def _default_horizon(
+        cls,
+        *,
+        action: str,
+        market_phase: Optional[str],
+        metadata: Any = None,
+    ) -> str:
+        if action == "alert":
+            return "intraday"
+        if market_phase == MarketPhase.PREMARKET.value:
+            minutes_to_open = cls._metadata_minutes(metadata, "minutes_to_open")
+            if (
+                minutes_to_open is not None
+                and minutes_to_open <= cls.PREMARKET_INTRADAY_MINUTES_TO_OPEN
+            ):
+                return "intraday"
+            return "3d"
+        if market_phase in INTRADAY_PHASES:
             return "intraday"
         return "3d"
 

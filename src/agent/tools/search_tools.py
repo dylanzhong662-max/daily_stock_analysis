@@ -13,6 +13,9 @@ from src.agent.tools.registry import ToolParameter, ToolDefinition, ToolPolicy
 
 logger = logging.getLogger(__name__)
 
+_MAX_NEWS_RESULTS = 3
+_MAX_SNIPPET_CHARS = 500
+
 _NEWS_READ_POLICY = ToolPolicy.declared(
     read_only=True,
     side_effects=["network_read", "db_write_cache"],
@@ -88,7 +91,7 @@ def _handle_search_stock_news(stock_code: str, stock_name: str) -> dict:
     if not service.is_available:
         return {"error": "No search engine available (no API keys configured)"}
 
-    response = service.search_stock_news(stock_code, stock_name, max_results=5)
+    response = service.search_stock_news(stock_code, stock_name, max_results=_MAX_NEWS_RESULTS)
 
     if not response.success:
         return {
@@ -111,13 +114,13 @@ def _handle_search_stock_news(stock_code: str, stock_name: str) -> dict:
         "results_count": len(response.results),
         "results": [
             {
-                "title": r.title,
-                "snippet": r.snippet,
+                "title": str(r.title or "")[:300],
+                "snippet": str(r.snippet or "")[:_MAX_SNIPPET_CHARS],
                 "url": r.url,
                 "source": r.source,
                 "published_date": r.published_date,
             }
-            for r in response.results
+            for r in response.results[:_MAX_NEWS_RESULTS]
         ],
     }
 
@@ -165,10 +168,9 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
     if not intel_results:
         return {"error": "Comprehensive intel search returned no results"}
 
-    # Format into readable report
-    report = service.format_intel_report(intel_results, stock_name)
-
-    # Also return structured data
+    # Return one structured representation only.  The old formatted report
+    # duplicated the same snippets and sources, roughly doubling the tool
+    # payload injected into the following LLM turn.
     dimensions = {}
     for dim_name, response in intel_results.items():
         if response and response.success:
@@ -183,8 +185,8 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
                 "results_count": len(response.results),
                 "results": [
                     {
-                        "title": r.title,
-                        "snippet": r.snippet,
+                        "title": str(r.title or "")[:300],
+                        "snippet": str(r.snippet or "")[:_MAX_SNIPPET_CHARS],
                         "source": r.source,
                     }
                     for r in response.results[:3]  # limit to 3 per dimension to save tokens
@@ -192,7 +194,7 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
             }
 
     return {
-        "report": report,
+        "successful_dimensions": list(dimensions),
         "dimensions": dimensions,
     }
 
@@ -200,8 +202,8 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
 search_comprehensive_intel_tool = ToolDefinition(
     name="search_comprehensive_intel",
     description="Multi-dimensional intelligence search: latest news, market analysis, "
-                "risk checking, earnings outlook, and industry trends for a stock. "
-                "Returns a formatted report and structured results.",
+                "risk checking, earnings outlook, and industry trends. Returns compact "
+                "structured evidence (up to 3 results per dimension).",
     parameters=[
         ToolParameter(
             name="stock_code",

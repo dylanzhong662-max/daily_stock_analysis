@@ -61,7 +61,6 @@ class SearchToolsPersistenceTest(unittest.TestCase):
             search_comprehensive_intel=MagicMock(
                 return_value={"latest_news": latest, "risk_check": failed}
             ),
-            format_intel_report=MagicMock(return_value="report"),
         )
         db = SimpleNamespace(save_news_intel=MagicMock(return_value=1))
 
@@ -69,7 +68,7 @@ class SearchToolsPersistenceTest(unittest.TestCase):
              patch("src.agent.tools.search_tools._get_db", return_value=db):
             result = _handle_search_comprehensive_intel("600519", "贵州茅台")
 
-        self.assertEqual(result["report"], "report")
+        self.assertEqual(result["successful_dimensions"], ["latest_news"])
         self.assertEqual(list(result["dimensions"].keys()), ["latest_news"])
         db.save_news_intel.assert_called_once_with(
             code="600519",

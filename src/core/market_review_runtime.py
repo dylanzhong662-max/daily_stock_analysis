@@ -107,6 +107,8 @@ def build_market_review_runtime(
             ),
             news_max_age_days=getattr(config, "news_max_age_days", 3),
             news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
+            rag_api_url=getattr(config, "rag_api_url", ""),
+            rag_api_key=getattr(config, "rag_api_key", ""),
         )
 
     analyzer = None

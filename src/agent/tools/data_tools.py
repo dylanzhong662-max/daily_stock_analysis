@@ -46,8 +46,12 @@ _PORTFOLIO_READ_POLICY = ToolPolicy.declared(
 
 _fetcher_manager_singleton = None
 _fetcher_manager_lock = Lock()
-_DAILY_HISTORY_DEFAULT_DAYS = 60
+# The agent needs a short, recent price window for reasoning.  Returning a
+# full quarter/year of row-level OHLCV data costs far more context than it
+# adds signal because ``analyze_trend`` already calculates longer indicators.
+_DAILY_HISTORY_DEFAULT_DAYS = 30
 _DAILY_HISTORY_MAX_DAYS = 365
+_DAILY_HISTORY_RETURN_MAX_RECORDS = 30
 
 
 def _get_fetcher_manager():
@@ -344,8 +348,12 @@ def _handle_get_daily_history(stock_code: str, days: int = 60) -> dict:
                 exc,
             )
 
-    # Convert DataFrame to list of dicts (last N records)
-    records = df.tail(min(effective_days, len(df))).to_dict(orient="records")
+    # Keep detailed bars bounded even when the model explicitly asks for a
+    # longer fetch window.  Long-window technical analysis belongs in
+    # ``analyze_trend``; it should not be copied into the next LLM turn.
+    total_records = min(effective_days, len(df))
+    returned_records = min(total_records, _DAILY_HISTORY_RETURN_MAX_RECORDS)
+    records = df.tail(returned_records).to_dict(orient="records")
     # Ensure date is string
     for r in records:
         if "date" in r:
@@ -362,16 +370,18 @@ def _handle_get_daily_history(stock_code: str, days: int = 60) -> dict:
         "requested_days": effective_days,
         "effective_days": effective_days,
         "actual_records": len(records),
-        "partial_cache": source == "db_cache" and len(records) < effective_days,
-        "total_records": len(records),
+        "available_records": total_records,
+        "truncated": total_records > returned_records,
+        "partial_cache": source == "db_cache" and total_records < effective_days,
+        "total_records": total_records,
         "data": records,
     }, metadata)
 
 
 get_daily_history_tool = ToolDefinition(
     name="get_daily_history",
-    description="Get daily OHLCV (open, high, low, close, volume) historical data "
-                "with MA5/MA10/MA20 indicators. Returns the last N trading days.",
+    description="Get compact daily OHLCV history with MA5/MA10/MA20. Returns at most "
+                "the latest 30 bars; use analyze_trend for longer-window indicators.",
     parameters=[
         ToolParameter(
             name="stock_code",
@@ -381,9 +391,9 @@ get_daily_history_tool = ToolDefinition(
         ToolParameter(
             name="days",
             type="integer",
-            description="Number of trading days to fetch (default: 60)",
+            description="Trading days to fetch (default: 30). The response includes at most 30 latest bars.",
             required=False,
-            default=60,
+            default=30,
         ),
     ],
     handler=_handle_get_daily_history,
@@ -398,6 +408,18 @@ get_daily_history_tool = ToolDefinition(
 
 def _handle_get_chip_distribution(stock_code: str) -> dict:
     """Get chip distribution data."""
+    normalized = str(stock_code or "").strip().upper()
+    base = normalized.rsplit(".", 1)[0]
+    is_a_share = (
+        (base.isdigit() and len(base) == 6)
+        or (len(base) == 8 and base[:2] in {"SH", "SZ", "BJ"} and base[2:].isdigit())
+    )
+    if not is_a_share:
+        return {
+            "error": "Chip distribution is only supported for A-share stocks.",
+            "retriable": False,
+            "supported_market": "cn",
+        }
     manager = _get_fetcher_manager()
     chip = manager.get_chip_distribution(stock_code)
 

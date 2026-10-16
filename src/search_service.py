@@ -2271,6 +2271,8 @@ class SearchService:
         searxng_public_instances_enabled: bool = True,
         news_max_age_days: int = 3,
         news_strategy_profile: str = "short",
+        rag_api_url: Optional[str] = None,
+        rag_api_key: Optional[str] = None,
     ):
         """
         初始化搜索服务
@@ -2288,6 +2290,8 @@ class SearchService:
             news_strategy_profile: 新闻窗口策略档位（ultra_short/short/medium/long）
         """
         self._providers: List[BaseSearchProvider] = []
+        self.rag_api_url = (rag_api_url or "").strip().rstrip("/")
+        self.rag_api_key = (rag_api_key or "").strip()
         self.news_max_age_days = max(1, news_max_age_days)
         raw_profile = (news_strategy_profile or "short").strip().lower()
         self.news_strategy_profile = normalize_news_strategy_profile(news_strategy_profile)
@@ -2348,8 +2352,11 @@ class SearchService:
             self._providers.insert(0, AnspireSearchProvider(anspire_keys))
             logger.info(f"已配置 Anspire Search 搜索，共 {len(anspire_keys)} 个 API Key")
             
-        if not self._providers:
+        if not self._providers and not (self.rag_api_url and self.rag_api_key):
             logger.warning("未配置任何搜索能力，新闻搜索功能将不可用")
+
+        if self.rag_api_url and self.rag_api_key:
+            logger.info("已启用股票代码硬过滤的新闻 RAG 补充源: %s", self.rag_api_url)
 
         # In-memory search result cache: {cache_key: (timestamp, SearchResponse)}
         self._cache: Dict[str, Tuple[float, 'SearchResponse']] = {}
@@ -2536,7 +2543,116 @@ class SearchService:
     @property
     def is_available(self) -> bool:
         """检查是否有可用的搜索引擎"""
-        return any(p.is_available for p in self._providers)
+        return bool(self.rag_api_url and self.rag_api_key) or any(
+            p.is_available for p in self._providers
+        )
+
+    def _search_rag_news(
+        self,
+        *,
+        query: str,
+        stock_code: str,
+        max_results: int,
+        search_days: int,
+    ) -> SearchResponse:
+        """Query the private news RAG with a mandatory single-ticker filter."""
+        if not self.rag_api_url or not self.rag_api_key:
+            return SearchResponse(query=query, results=[], provider="NewsRAG", success=False)
+
+        started_at = time.monotonic()
+        try:
+            response = _post_with_retry(
+                f"{self.rag_api_url}/api/v1/rag/search",
+                headers={"X-API-Key": self.rag_api_key, "Content-Type": "application/json"},
+                json={
+                    "query": query,
+                    "tickers": [stock_code],
+                    "data_types": ["news", "earnings", "sec_filing", "regulatory", "insider"],
+                    "date_from": (datetime.now(timezone.utc) - timedelta(days=search_days)).isoformat(),
+                    "min_importance": 0.3,
+                    "top_k": max(1, min(max_results, 10)),
+                    "include_metadata": True,
+                },
+                timeout=8,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            results: List[SearchResult] = []
+            for item in payload.get("results") or []:
+                if not isinstance(item, dict):
+                    continue
+                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+                ticker_symbols = [str(value).upper() for value in metadata.get("ticker_symbols") or []]
+                if stock_code.upper() not in ticker_symbols:
+                    continue
+                snippet = str(metadata.get("summary_cn") or item.get("chunk_text") or "").strip()
+                title = str(metadata.get("section_title") or snippet.splitlines()[0] if snippet else stock_code).strip()
+                results.append(
+                    SearchResult(
+                        title=title[:180],
+                        snippet=snippet[:1500],
+                        url=str(metadata.get("source_url") or ""),
+                        source=f"NewsRAG/{metadata.get('source_name') or 'knowledge-base'}",
+                        published_date=metadata.get("published_at") or metadata.get("event_time"),
+                        relevance_score=100,
+                        relevance_category=self._DIRECT_NEWS_CATEGORY,
+                        relevance_reasons=[f"RAG ticker_symbols 精确命中 {stock_code}"],
+                    )
+                )
+            self._record_news_search_run(
+                provider="NewsRAG",
+                operation="search_stock_news",
+                success=True,
+                latency_ms=self._elapsed_ms(started_at),
+                record_count=len(results),
+            )
+            return SearchResponse(query=query, results=results, provider="NewsRAG", success=True)
+        except Exception as exc:
+            logger.warning("新闻 RAG 查询失败，继续使用原搜索链路: %s", exc)
+            self._record_news_search_run(
+                provider="NewsRAG",
+                operation="search_stock_news",
+                success=False,
+                latency_ms=self._elapsed_ms(started_at),
+                error_type=type(exc).__name__,
+                error_message=exc,
+            )
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider="NewsRAG",
+                success=False,
+                error_message=str(exc),
+            )
+
+    @staticmethod
+    def _merge_news_responses(
+        primary: SearchResponse,
+        supplement: SearchResponse,
+        *,
+        max_results: int,
+    ) -> SearchResponse:
+        """Merge RAG and web news, preserving RAG priority and de-duplicating URLs."""
+        merged: List[SearchResult] = []
+        seen = set()
+        for item in list(primary.results or []) + list(supplement.results or []):
+            key = (item.url or "").strip() or f"{item.title}|{item.published_date}"
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+            if len(merged) >= max_results:
+                break
+        providers = "+".join(
+            value for value in (primary.provider, supplement.provider) if value and value != "None"
+        ) or "None"
+        return SearchResponse(
+            query=primary.query or supplement.query,
+            results=merged,
+            provider=providers,
+            success=bool(primary.success or supplement.success),
+            error_message=None if merged else (primary.error_message or supplement.error_message),
+        )
 
     def _cache_key(self, query: str, max_results: int, days: int) -> str:
         """Build a cache key from query parameters."""
@@ -3736,6 +3852,13 @@ class SearchService:
             provider_max_results,
         )
 
+        rag_response = self._search_rag_news(
+            query=query,
+            stock_code=stock_code,
+            max_results=provider_max_results,
+            search_days=search_days,
+        )
+
         cache_key = self._cache_key(
             (
                 f"{query}|target={stock_code}:{stock_name}|"
@@ -3894,8 +4017,11 @@ class SearchService:
                             provider.name,
                             stats["direct_count"],
                         )
-                        self._put_cache(cache_key, limited_response)
-                        return limited_response
+                        merged_response = self._merge_news_responses(
+                            rag_response, limited_response, max_results=max_results
+                        )
+                        self._put_cache(cache_key, merged_response)
+                        return merged_response
 
                     if prefer_chinese and stats["direct_count"] > 0:
                         logger.info(
@@ -3950,8 +4076,16 @@ class SearchService:
                         )
 
             if best_ranked_response is not None:
-                self._put_cache(cache_key, best_ranked_response)
-                return best_ranked_response
+                merged_response = self._merge_news_responses(
+                    rag_response, best_ranked_response, max_results=max_results
+                )
+                self._put_cache(cache_key, merged_response)
+                return merged_response
+
+            if rag_response.results:
+                rag_response = self._limit_search_response(rag_response, max_results=max_results)
+                self._put_cache(cache_key, rag_response)
+                return rag_response
 
             if had_provider_success:
                 return SearchResponse(
@@ -4574,6 +4708,8 @@ def get_search_service() -> SearchService:
                     searxng_public_instances_enabled=config.searxng_public_instances_enabled,
                     news_max_age_days=config.news_max_age_days,
                     news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
+                    rag_api_url=getattr(config, "rag_api_url", ""),
+                    rag_api_key=getattr(config, "rag_api_key", ""),
                 )
     
     return _search_service

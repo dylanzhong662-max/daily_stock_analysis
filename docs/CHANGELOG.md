@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 支持通过 LiteLLM OTEL 回调将 Agent 的模型调用、token 用量、耗时和错误上报到 Langfuse Cloud。
+- [新功能] 个股分析新闻检索接入私有 RAG，按当前股票代码执行 `tickers` 硬过滤后与原网页新闻合并；RAG 不可用时自动降级到原搜索链路。
+- [新功能] 定时调度（RuntimeSchedulerService 与 run_with_schedule 两条路径）新增每日前向结果评估任务，自动运行回测、决策信号与策略意见的结果评估；受既有 `BACKTEST_ENABLED` 开关控制（默认开启）。
+- [改进] 决策信号默认 horizon 判定：距开盘较远的盘前（如每日批量分析在美股开盘前数小时运行）不再默认标为 `intraday`，改用日线级 `3d`，使信号可被前向结果评估、且不会在数小时内过期；临近开盘的盘前与盘中/午休/尾盘仍为 `intraday`。
 - [修复] 统一等价股票代码的本地日线候选与同源窗口解析；冲突沪深交易所代码不再降级匹配裸码，回测仅接受快照或交易日历确认的起点，并在同一起点中优先完整的单一代码窗口。
 - [新功能] 新增按 individual SkillAgent 自身 signal、版本化 engine 与本地已存同源日线窗口计算并持久化 `skill_opinion_outcomes` 的核心服务；本阶段不提供管理员 API、表现统计、样本充足度或权重调整。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->

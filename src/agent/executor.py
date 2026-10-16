@@ -80,7 +80,7 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
 - `get_chip_distribution` 获取筹码分布
 
 **第三阶段 · 情报搜索**（等前两阶段完成后执行）
-- `search_stock_news` 搜索最新资讯、减持、业绩预告等风险信号
+- `search_stock_news` 搜索最新资讯、减持、业绩预告等风险信号。该工具会默认先检索 News RAG 知识库，再补充实时网页新闻；必须调用，且不得跳过 RAG 证据。
 
 **第四阶段 · 生成报告**（所有数据就绪后，输出完整决策仪表盘 JSON）
 
@@ -397,7 +397,7 @@ LEGACY_DEFAULT_CHAT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mark
 - 调用 `get_chip_distribution` 获取筹码分布结构
 
 **第三阶段 · 情报搜索**（等前两阶段完成后再执行）
-- 调用 `search_stock_news` 搜索最新新闻公告、减持、业绩预告等风险信号
+- 必须调用 `search_stock_news` 搜索最新新闻公告、减持、业绩预告等风险信号；该工具默认合并 News RAG 与实时网页新闻。
 
 **第四阶段 · 综合分析**（所有工具数据就绪后生成回答）
 - 基于上述真实数据，结合激活技能进行综合研判，输出投资建议
@@ -434,7 +434,7 @@ CHAT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数�
 - 调用 `get_chip_distribution` 获取筹码分布结构
 
 **第三阶段 · 情报搜索**（等前两阶段完成后再执行）
-- 调用 `search_stock_news` 搜索最新新闻公告、减持、业绩预告等风险信号
+- 必须调用 `search_stock_news` 搜索最新新闻公告、减持、业绩预告等风险信号；该工具默认合并 News RAG 与实时网页新闻。
 
 **第四阶段 · 综合分析**（所有工具数据就绪后生成回答）
 - 基于上述真实数据，结合激活技能进行综合研判，输出投资建议

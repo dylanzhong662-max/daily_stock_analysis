@@ -97,6 +97,84 @@ def build_agent_event_monitor_background_tasks(
     }]
 
 
+BACKTEST_EVALUATION_TASK_NAME = "backtest_evaluation"
+# 评估闭环轮询间隔（秒）。评估是幂等的（force=False 会跳过已评估记录），
+# 因此一天跑几次只是为了让新到期的历史尽快被评估，不会重复计算。
+_BACKTEST_EVALUATION_INTERVAL_SECONDS = 6 * 60 * 60
+
+
+def _brief_result(result: Any) -> Any:
+    """Extract a compact, log-friendly summary from a service result dict."""
+    if not isinstance(result, dict):
+        return result
+    keys = (
+        "completed_count",
+        "total_evaluations",
+        "processed",
+        "evaluated",
+        "pending",
+        "written",
+        "skipped",
+        "status",
+    )
+    brief = {key: result[key] for key in keys if key in result}
+    return brief or {"keys": sorted(result.keys())[:8]}
+
+
+def run_backtest_evaluation_once() -> None:
+    """Run one forward-outcome evaluation pass across backtest + signal + skill loops.
+
+    Each sub-evaluation is isolated so one failing loop does not block the others,
+    and the scheduler's per-task guard already prevents a raised error from killing
+    the scheduling thread. Evaluations are idempotent (force=False), so repeated
+    passes only pick up newly matured records.
+    """
+    from src.storage import DatabaseManager
+
+    db_manager = DatabaseManager.get_instance()
+
+    try:
+        from src.services.backtest_service import BacktestService
+
+        stats = BacktestService(db_manager).run_backtest(force=False)
+        logger.info("[EvalLoop] backtest evaluation done: %s", _brief_result(stats))
+    except Exception as exc:  # noqa: BLE001 - one loop must not block the others
+        logger.exception("[EvalLoop] backtest evaluation failed: %s", exc)
+
+    try:
+        from src.services.decision_signal_outcome_service import DecisionSignalOutcomeService
+
+        result = DecisionSignalOutcomeService().run_outcomes()
+        logger.info("[EvalLoop] decision-signal outcomes done: %s", _brief_result(result))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("[EvalLoop] decision-signal outcomes failed: %s", exc)
+
+    try:
+        from src.services.skill_opinion_outcome_service import SkillOpinionOutcomeService
+
+        result = SkillOpinionOutcomeService(db_manager=db_manager).run_outcomes()
+        logger.info("[EvalLoop] skill-opinion outcomes done: %s", _brief_result(result))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("[EvalLoop] skill-opinion outcomes failed: %s", exc)
+
+
+def build_backtest_evaluation_background_tasks(config: Config) -> List[Dict[str, Any]]:
+    """Build the daily forward-outcome evaluation background task.
+
+    Gated on the existing ``backtest_enabled`` flag (default true), so operators can
+    disable the loop from the settings UI without a code change.
+    """
+    if not getattr(config, "backtest_enabled", True):
+        return []
+
+    return [{
+        "task": run_backtest_evaluation_once,
+        "interval_seconds": _BACKTEST_EVALUATION_INTERVAL_SECONDS,
+        "run_immediately": False,
+        "name": BACKTEST_EVALUATION_TASK_NAME,
+    }]
+
+
 class RuntimeSchedulerService:
     """Manage scheduled analysis inside the current API/Web/Desktop process."""
 
@@ -213,7 +291,9 @@ class RuntimeSchedulerService:
     def _current_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         if self._background_tasks_provider is not None:
             return self._background_tasks_provider(config)
-        return self._current_agent_event_monitor_background_tasks(config)
+        tasks = list(self._current_agent_event_monitor_background_tasks(config))
+        tasks.extend(build_backtest_evaluation_background_tasks(config))
+        return tasks
 
     def _current_agent_event_monitor_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         name = "agent_event_monitor"

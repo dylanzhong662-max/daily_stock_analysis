@@ -250,6 +250,22 @@ def test_service_defaults_lifecycle_and_preserves_explicit_values(isolated_db) -
     assert before_opening + timedelta(hours=4, minutes=9) <= opening_expiry
     assert opening_expiry <= utc_naive_now() + timedelta(hours=4, minutes=11)
 
+    # 距开盘很远的盘前（如美股在北京时间 18:00 的每日批量分析，距开盘约 4 小时）
+    # 属于下一交易日视角，应落到可按日线评估、且不会当日过期的 3d，而非 intraday。
+    batch_premarket_payload = _payload(
+        source_report_id=159,
+        trace_id="trace-lifecycle-batch-premarket",
+        market_phase="premarket",
+        metadata={"market_phase_summary": {"minutes_to_open": 240}},
+    )
+    batch_premarket_payload.pop("horizon")
+    before_batch_premarket = utc_naive_now()
+    batch_premarket = service.create_signal(batch_premarket_payload)["item"]
+    batch_premarket_expiry = datetime.fromisoformat(batch_premarket["expires_at"])
+    assert batch_premarket["horizon"] == "3d"
+    assert before_batch_premarket + timedelta(days=3, seconds=-1) <= batch_premarket_expiry
+    assert batch_premarket_expiry <= utc_naive_now() + timedelta(days=3, seconds=1)
+
     hk_alert_payload = _payload(
         source_report_id=152,
         trace_id="trace-lifecycle-hk-alert",

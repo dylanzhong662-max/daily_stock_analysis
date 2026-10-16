@@ -37,6 +37,10 @@ x-common: &common
 
     # Web/API service bind address (must be 0.0.0.0 inside container)
     - WEBUI_HOST=0.0.0.0
+
+    # [部署适配] auth/config 读写的 .env 指向挂载卷内文件：
+    # 让 ADMIN_AUTH_ENABLED 鉴权与 Web 改配置的原子写(os.replace)在 bind-mount 目录内正常工作
+    - ENV_FILE=/app/data/.env
     # API_PORT 从 .env 文件读取，无需在此硬编码
 
     # 代理设置（如果需要）
@@ -62,11 +66,11 @@ services:
     <<: *common
     container_name: stock-analyzer
 
-  # FastAPI 模式
+  # 单容器一体模式：FastAPI Web/API + 每日定时分析（省内存，适合 2c4g 与 RAG 共存）
   server:
     <<: *common
     container_name: stock-server
-    command: ["python", "main.py", "--serve-only", "--host", "0.0.0.0", "--port", "${API_PORT:-8000}"]
+    command: ["python", "main.py", "--serve", "--schedule", "--host", "0.0.0.0", "--port", "${API_PORT:-8000}"]
     # 若使用 network_mode: host，则以下 ports 映射无效，端口由 command 中的 --port 指定
     ports:
       - "${API_PORT:-8000}:${API_PORT:-8000}"

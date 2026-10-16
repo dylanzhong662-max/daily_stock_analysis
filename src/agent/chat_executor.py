@@ -11,6 +11,7 @@ from src.agent.agent_backend import AgentBackend, AgentRunRequest
 from src.agent.conversation import conversation_manager
 from src.agent.executor import AgentResult, PreparedAgentChat, prepare_agent_chat
 from src.agent.provider_trace import persist_provider_trace_turns
+from src.agent.langfuse_observability import finish_agent_run, observe_agent_run
 
 
 @dataclass(frozen=True)
@@ -110,19 +111,27 @@ class AgentChatExecutor:
         cancel_event=None,
     ) -> AgentResult:
         """Execute a previously accepted turn and persist its terminal result."""
-        backend_result = self.backend.run(
-            AgentRunRequest(
-                system_prompt=turn.prepared.system_prompt,
-                history_messages=turn.prepared.history_messages,
-                user_message=turn.message,
-                session_id=turn.session_id,
-                stock_scope=turn.prepared.stock_scope,
-                max_steps=self.max_steps,
-                max_wall_clock_seconds=self.timeout_seconds,
-                progress_callback=progress_callback,
-                cancel_event=cancel_event,
+        with observe_agent_run(session_id=turn.session_id, user_message=turn.message) as observation:
+            backend_result = self.backend.run(
+                AgentRunRequest(
+                    system_prompt=turn.prepared.system_prompt,
+                    history_messages=turn.prepared.history_messages,
+                    user_message=turn.message,
+                    session_id=turn.session_id,
+                    stock_scope=turn.prepared.stock_scope,
+                    max_steps=self.max_steps,
+                    max_wall_clock_seconds=self.timeout_seconds,
+                    progress_callback=progress_callback,
+                    cancel_event=cancel_event,
+                )
             )
-        )
+            finish_agent_run(
+                observation,
+                success=backend_result.success,
+                total_steps=backend_result.total_steps,
+                total_tool_calls=len(backend_result.tool_calls_log),
+                error_code=backend_result.error_code,
+            )
         total_tokens = 0
         if isinstance(backend_result.usage, dict):
             total_tokens = int(backend_result.usage.get("total_tokens") or 0)

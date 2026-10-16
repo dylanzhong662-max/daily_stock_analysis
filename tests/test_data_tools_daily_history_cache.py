@@ -117,7 +117,9 @@ class DailyHistoryCacheToolTest(unittest.TestCase):
             result = self._run_with_frozen_date(target, "1810.HK", days=60)
 
         self.assertEqual(result["code"], "1810.HK")
-        self.assertEqual(result["actual_records"], 40)
+        self.assertEqual(result["actual_records"], 30)
+        self.assertEqual(result["available_records"], 40)
+        self.assertTrue(result["truncated"])
         manager.get_daily_data.assert_not_called()
 
     def test_prefers_normalized_candidate_when_dates_and_counts_tie(self) -> None:
