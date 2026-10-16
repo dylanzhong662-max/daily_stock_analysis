@@ -120,6 +120,14 @@ DSA 代码会自动转换成 Yahoo 格式：`600519` → `600519.SS`，`hk00700`
 
 ## 使用
 
+### Web 页面
+
+侧边栏「深度研究」（`/tradingagents`）：输入美股代码、可选日期和分析师，点「开始研究」后页面每 3 秒轮询进度，完成后展示评级、组合经理决策和各角色报告；右侧列出历史报告，可打开完整 HTML 报告。
+
+- 研究在 `stock-server` 进程内运行，**同一时间只允许 1 个任务**（再次提交返回 409 `tradingagents_busy`，页面会自动接管正在运行的任务）。
+- 需要 `TRADINGAGENTS_ENABLED=true`；Docker 部署时 `server` 服务内存上限已调到 2G。
+- 任务状态保存在内存里，服务重启会丢失进行中的任务；已生成的报告不受影响。
+
 ### CLI
 
 ```bash
@@ -140,6 +148,10 @@ python main.py --tradingagents NVDA --tradingagents-date 2026-09-30 --no-notify
 GET  /api/v1/tradingagents/status            # {enabled, available, version, analysts}
 POST /api/v1/tradingagents/tasks             # 202，请求体 {"stock_code": "AAPL", "trade_date": "2026-09-30", "analysts": ["market","news"]}
 GET  /api/v1/tradingagents/tasks/{task_id}   # status/progress/error；completed 后 result 为下方结构
+GET  /api/v1/tradingagents/running            # {task_id}，当前运行中的任务（无则为 null）
+GET  /api/v1/tradingagents/reports            # 历史报告列表（report_id/ticker/created_at/rating）
+GET  /api/v1/tradingagents/reports/{id}       # 单份报告各阶段 Markdown
+GET  /api/v1/tradingagents/reports/{id}/html  # 完整 HTML 报告
 ```
 
 `result` 的字段：

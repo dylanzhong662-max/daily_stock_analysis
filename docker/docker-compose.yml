@@ -74,3 +74,10 @@ services:
     # 若使用 network_mode: host，则以下 ports 映射无效，端口由 command 中的 --port 指定
     ports:
       - "${API_PORT:-8000}:${API_PORT:-8000}"
+    # 常驻 Web/API + 定时分析约占 900MB；Web 端 TradingAgents 研究在本进程内运行（同一时间仅 1 个），放宽到 2G
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M

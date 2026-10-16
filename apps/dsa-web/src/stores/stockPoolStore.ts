@@ -664,6 +664,10 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
   },
 
   refreshHistoryForCompletedTask: async (task) => {
+    // TradingAgents 深度研究不写入分析历史，完成时无需刷新
+    if (task.reportType === 'tradingagents') {
+      return;
+    }
     await fetchHistory(get, set, {
       reset: true,
       silent: true,

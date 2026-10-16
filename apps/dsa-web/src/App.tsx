@@ -24,6 +24,7 @@ const AlertsPage = lazy(() => import('./pages/AlertsPage'));
 const TokenUsagePage = lazy(() => import('./pages/TokenUsagePage'));
 const StockScreeningPage = lazy(() => import('./pages/StockScreeningPage'));
 const UsScreenerPage = lazy(() => import('./pages/UsScreenerPage'));
+const TradingAgentsPage = lazy(() => import('./pages/TradingAgentsPage'));
 
 const AppContent: React.FC = () => {
   const location = useLocation();
@@ -86,6 +87,7 @@ const AppContent: React.FC = () => {
         <Route path="/decision-signals" element={<DecisionSignalsPage />} />
         <Route path="/screening" element={<StockScreeningPage />} />
         <Route path="/us-screener" element={<UsScreenerPage />} />
+        <Route path="/tradingagents" element={<TradingAgentsPage />} />
         <Route path="/backtest" element={<BacktestPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/usage" element={<TokenUsagePage />} />

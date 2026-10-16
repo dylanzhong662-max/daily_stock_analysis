@@ -11,10 +11,12 @@ LLM 配置默认从 DSA 的 ``LITELLM_MODEL`` / API Key / ``OPENAI_BASE_URL`` �
 
 from __future__ import annotations
 
+import gc
 import importlib
 import logging
 import os
-from datetime import date
+import re
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -80,6 +82,62 @@ _STATE_REPORT_KEYS = (
     "trader_investment_plan",
     "final_trade_decision",
 )
+
+
+# 报告目录结构（tradingagents/reporting.py::write_report_tree）
+REPORT_SECTIONS = (
+    ("market", "技术面分析师", "1_analysts/market.md"),
+    ("sentiment", "情绪分析师", "1_analysts/sentiment.md"),
+    ("news", "新闻分析师", "1_analysts/news.md"),
+    ("fundamentals", "基本面分析师", "1_analysts/fundamentals.md"),
+    ("bull", "多方研究员", "2_research/bull.md"),
+    ("bear", "空方研究员", "2_research/bear.md"),
+    ("research_manager", "研究经理", "2_research/manager.md"),
+    ("trader", "交易员", "3_trading/trader.md"),
+    ("aggressive", "激进风控", "4_risk/aggressive.md"),
+    ("conservative", "保守风控", "4_risk/conservative.md"),
+    ("neutral", "中性风控", "4_risk/neutral.md"),
+    ("decision", "组合经理决策", "5_portfolio/decision.md"),
+)
+_REPORT_ID_RE = re.compile(r"^(?P<ticker>[A-Za-z0-9.^=-]+)_(?P<stamp>\d{8}_\d{6})$")
+_RATING_LINE_RE = re.compile(r"\*\*Rating\*\*\s*[:：]\s*([A-Za-z]+)")
+
+
+def reports_root() -> Path:
+    results_dir = (os.environ.get("TRADINGAGENTS_RESULTS_DIR") or "").strip()
+    base = Path(results_dir) if results_dir else TRADINGAGENTS_DATA_DIR / "logs"
+    return base / "reports"
+
+
+def _parse_rating(decision_path: Path) -> Optional[str]:
+    try:
+        match = _RATING_LINE_RE.search(decision_path.read_text(encoding="utf-8")[:4000])
+    except OSError:
+        return None
+    return match.group(1) if match else None
+
+
+def _report_dir(report_id: str) -> Path:
+    match = _REPORT_ID_RE.match(report_id or "")
+    root = reports_root().resolve()
+    path = (root / report_id).resolve() if match else None
+    if path is None or path.parent != root or not path.is_dir():
+        raise TradingAgentsError("tradingagents_report_not_found", f"报告不存在: {report_id}", status_code=404)
+    return path
+
+
+def _report_summary(path: Path, report_language: str) -> Dict[str, Any]:
+    match = _REPORT_ID_RE.match(path.name)
+    rating = _parse_rating(path / "5_portfolio" / "decision.md")
+    created_at = datetime.strptime(match.group("stamp"), "%Y%m%d_%H%M%S").isoformat() if match else None
+    return {
+        "report_id": path.name,
+        "ticker": match.group("ticker") if match else path.name,
+        "created_at": created_at,
+        "rating": rating,
+        "operation_advice": rating_to_operation_advice(rating or "", report_language),
+        "has_html": (path / "complete_report.html").is_file(),
+    }
 
 
 class TradingAgentsError(Exception):
@@ -322,6 +380,8 @@ class TradingAgentsService:
         state, rating = graph.propagate(ticker, run_date)
         report_md_path = Path(graph.save_reports(state, ticker))
         report_html_path = report_md_path.with_suffix(".html")
+        del graph
+        gc.collect()
 
         report_language = normalize_report_language(getattr(self.config, "report_language", "zh"))
         result: Dict[str, Any] = {
@@ -335,6 +395,7 @@ class TradingAgentsService:
             "deep_think_llm": ta_config.get("deep_think_llm"),
             "quick_think_llm": ta_config.get("quick_think_llm"),
             "data_source": data_source,
+            "report_id": report_md_path.parent.name,
             "report_md_path": str(report_md_path),
             "report_html_path": str(report_html_path) if report_html_path.exists() else None,
         }
@@ -343,6 +404,38 @@ class TradingAgentsService:
             result[key] = value if isinstance(value, str) else ""
         logger.info("[TradingAgents] done ticker=%s rating=%s report=%s", ticker, rating, report_md_path)
         return result
+
+
+def list_reports(config: Config, limit: int = 50) -> List[Dict[str, Any]]:
+    """最近的 TradingAgents 报告（按目录名时间倒序）。"""
+    root = reports_root()
+    if not root.is_dir():
+        return []
+    language = normalize_report_language(getattr(config, "report_language", "zh"))
+    dirs = [p for p in root.iterdir() if p.is_dir() and _REPORT_ID_RE.match(p.name)]
+    dirs.sort(key=lambda p: _REPORT_ID_RE.match(p.name).group("stamp"), reverse=True)
+    return [_report_summary(p, language) for p in dirs[: max(1, limit)]]
+
+
+def read_report(config: Config, report_id: str) -> Dict[str, Any]:
+    """读取单份报告的各阶段 Markdown。"""
+    path = _report_dir(report_id)
+    language = normalize_report_language(getattr(config, "report_language", "zh"))
+    summary = _report_summary(path, language)
+    sections = []
+    for key, title, rel in REPORT_SECTIONS:
+        file = path / rel
+        if file.is_file():
+            sections.append({"key": key, "title": title, "content": file.read_text(encoding="utf-8")})
+    summary["sections"] = sections
+    return summary
+
+
+def report_html_path(report_id: str) -> Path:
+    html = _report_dir(report_id) / "complete_report.html"
+    if not html.is_file():
+        raise TradingAgentsError("tradingagents_report_not_found", f"报告 {report_id} 没有 HTML 版本", status_code=404)
+    return html
 
 
 def format_notification(result: Dict[str, Any], *, max_chars: int = 1500) -> str:

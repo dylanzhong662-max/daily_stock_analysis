@@ -337,3 +337,122 @@ class EndpointTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReportsApiTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        env = patch.dict(os.environ, {"TRADINGAGENTS_RESULTS_DIR": self.tmp.name})
+        env.start()
+        self.addCleanup(env.stop)
+        self.reports = Path(self.tmp.name) / "reports"
+
+    def _make_report(self, report_id, rating="Underweight", html=True):
+        root = self.reports / report_id
+        (root / "5_portfolio").mkdir(parents=True)
+        (root / "1_analysts").mkdir()
+        (root / "5_portfolio" / "decision.md").write_text(f"**Rating**: {rating}\n\nbody", encoding="utf-8")
+        (root / "1_analysts" / "market.md").write_text("market report", encoding="utf-8")
+        if html:
+            (root / "complete_report.html").write_text("<html>ok</html>", encoding="utf-8")
+        return root
+
+    def _client(self):
+        app = FastAPI()
+        app.include_router(ta_endpoint.router, prefix="/api/v1/tradingagents")
+        app.dependency_overrides[ta_endpoint.get_config_dep] = lambda: _config()
+        return TestClient(app)
+
+    def test_list_reports_newest_first_with_rating(self):
+        self._make_report("AAPL_20261016_151221", "Underweight")
+        self._make_report("MSFT_20261017_090000", "Buy", html=False)
+        (self.reports / "junk").mkdir(parents=True)
+        reports = svc.list_reports(_config())
+        self.assertEqual([r["report_id"] for r in reports], ["MSFT_20261017_090000", "AAPL_20261016_151221"])
+        self.assertEqual(reports[0]["rating"], "Buy")
+        self.assertEqual(reports[0]["operation_advice"], "买入")
+        self.assertFalse(reports[0]["has_html"])
+        self.assertEqual(reports[1]["ticker"], "AAPL")
+        self.assertEqual(reports[1]["created_at"], "2026-10-16T15:12:21")
+
+    def test_read_report_sections_and_traversal_rejected(self):
+        self._make_report("AAPL_20261016_151221")
+        detail = svc.read_report(_config(), "AAPL_20261016_151221")
+        self.assertEqual([s["key"] for s in detail["sections"]], ["market", "decision"])
+        for bad in ("../../etc", "AAPL_20261016_151221/../x", "nope_20260101_000000"):
+            with self.assertRaises(TradingAgentsError) as ctx:
+                svc.read_report(_config(), bad)
+            self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_report_endpoints(self):
+        self._make_report("AAPL_20261016_151221")
+        self._make_report("MSFT_20261017_090000", html=False)
+        client = self._client()
+        self.assertEqual(len(client.get("/api/v1/tradingagents/reports").json()["reports"]), 2)
+        self.assertEqual(client.get("/api/v1/tradingagents/reports/AAPL_20261016_151221").json()["rating"], "Underweight")
+        html = client.get("/api/v1/tradingagents/reports/AAPL_20261016_151221/html")
+        self.assertEqual(html.status_code, 200)
+        self.assertIn("ok", html.text)
+        self.assertEqual(client.get("/api/v1/tradingagents/reports/MSFT_20261017_090000/html").status_code, 404)
+        self.assertEqual(client.get("/api/v1/tradingagents/reports/..%2F..%2Fetc").status_code, 404)
+
+
+class SingleRunGuardTest(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(ta_endpoint, "_running_task_id", None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _client(self):
+        app = FastAPI()
+        app.include_router(ta_endpoint.router, prefix="/api/v1/tradingagents")
+        app.dependency_overrides[ta_endpoint.get_config_dep] = lambda: _config()
+        return TestClient(app)
+
+    def test_second_task_rejected_while_first_running(self):
+        from src.services.task_queue import TaskStatus as QueueTaskStatus
+
+        queue = MagicMock()
+        queue.submit_background_task.side_effect = lambda run, **kw: SimpleNamespace(
+            task_id=kw["task_id"], trace_id=kw["task_id"], status="pending", message="ok"
+        )
+        queue.get_task.return_value = SimpleNamespace(status=QueueTaskStatus.PROCESSING, report_type="tradingagents")
+        with (
+            patch.object(ta_endpoint.TradingAgentsService, "ensure_ready", return_value=None),
+            patch.object(ta_endpoint, "get_task_queue", return_value=queue),
+        ):
+            client = self._client()
+            first = client.post("/api/v1/tradingagents/tasks", json={"stock_code": "AAPL"})
+            self.assertEqual(first.status_code, 202)
+            running = client.get("/api/v1/tradingagents/running").json()["task_id"]
+            self.assertEqual(running, first.json()["task_id"])
+            second = client.post("/api/v1/tradingagents/tasks", json={"stock_code": "MSFT"})
+            self.assertEqual(second.status_code, 409)
+            self.assertEqual(second.json()["detail"]["error"], "tradingagents_busy")
+            self.assertEqual(second.json()["detail"]["detail"]["task_id"], running)
+
+            # 第一个任务结束后可以再提交
+            queue.get_task.return_value = SimpleNamespace(status=QueueTaskStatus.COMPLETED, report_type="tradingagents")
+            self.assertIsNone(client.get("/api/v1/tradingagents/running").json()["task_id"])
+            self.assertEqual(client.post("/api/v1/tradingagents/tasks", json={"stock_code": "MSFT"}).status_code, 202)
+
+    def test_guard_released_after_run_finishes(self):
+        captured = {}
+        queue = MagicMock()
+
+        def submit(run, **kw):
+            captured["run"] = run
+            return SimpleNamespace(task_id=kw["task_id"], trace_id=kw["task_id"], status="pending", message="ok")
+
+        queue.submit_background_task.side_effect = submit
+        with (
+            patch.object(ta_endpoint.TradingAgentsService, "ensure_ready", return_value=None),
+            patch.object(ta_endpoint.TradingAgentsService, "analyze", side_effect=RuntimeError("boom")),
+            patch.object(ta_endpoint, "get_task_queue", return_value=queue),
+        ):
+            self._client().post("/api/v1/tradingagents/tasks", json={"stock_code": "AAPL"})
+            self.assertIsNotNone(ta_endpoint._running_task_id)
+            with self.assertRaises(RuntimeError):
+                captured["run"]()
+        self.assertIsNone(ta_endpoint._running_task_id)

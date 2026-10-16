@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 新增按 individual SkillAgent 自身 signal、版本化 engine 与本地已存同源日线窗口计算并持久化 `skill_opinion_outcomes` 的核心服务；本阶段不提供管理员 API、表现统计、样本充足度或权重调整。
 - [新功能] 新增可选的 TradingAgents 多智能体深度研究入口（CLI `--tradingagents` / API `/api/v1/tradingagents/tasks`），默认关闭，依赖单独通过 `requirements-tradingagents.txt` 安装，模型默认复用 `LITELLM_MODEL`。
 - [新功能] TradingAgents 支持 FMP 数据源（`TRADINGAGENTS_DATA_SOURCE=auto|fmp|yfinance`，配置 `FMP_API_KEY` 时默认启用），行情、基本面、新闻与内部人交易改走 FMP，解决国内机房 Yahoo 429。
+- [新功能] Web 新增「深度研究」页（`/tradingagents`），可在页面发起 TradingAgents 研究、查看进度与历史报告；新增 `/api/v1/tradingagents/running`、`/reports` 接口，同一时间仅允许一个研究任务；Docker `server` 内存上限调整为 2G。
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
