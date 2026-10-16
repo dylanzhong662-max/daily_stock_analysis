@@ -58,6 +58,24 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install \
     --timeout 120 --retries 5 \
     -r requirements.txt
 
+# 可选：TradingAgents 多智能体深度研究（python main.py --tradingagents ...）。
+# 把主流程核心依赖锁在当前已装版本（constraints），避免被 TradingAgents 连带升级；
+# 其余间接依赖允许调整（如 tenacity 需降到 <9.2 以满足 google-genai）。INSTALL_TRADINGAGENTS=false 可跳过。
+ARG INSTALL_TRADINGAGENTS=true
+COPY requirements-tradingagents.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "$INSTALL_TRADINGAGENTS" = "true" ]; then \
+      pip freeze | grep -iE '^(pandas|numpy|openai|litellm|pydantic|pydantic-core|fastapi|starlette|uvicorn|yfinance|requests|sqlalchemy|httpx|akshare)==' > /tmp/dsa-constraints.txt && \
+      pip install \
+        -i https://pypi.tuna.tsinghua.edu.cn/simple \
+        --trusted-host pypi.tuna.tsinghua.edu.cn \
+        --timeout 120 --retries 5 \
+        -c /tmp/dsa-constraints.txt \
+        -r requirements-tradingagents.txt && \
+      rm -f /tmp/dsa-constraints.txt && \
+      python -c "import tradingagents; print('tradingagents', tradingagents.__version__)"; \
+    fi
+
 # 复制应用代码
 COPY *.py ./
 COPY api/ ./api/

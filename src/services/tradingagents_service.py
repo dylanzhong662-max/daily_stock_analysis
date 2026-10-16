@@ -229,6 +229,29 @@ def _resolve_analysts(analysts: Optional[List[str]], default: List[str]) -> List
     return selected
 
 
+def resolve_data_source(config: Config) -> str:
+    """TRADINGAGENTS_DATA_SOURCE=auto|fmp|yfinance；auto 在配置了 FMP_API_KEY 时用 FMP。"""
+    from src.services.tradingagents_fmp import resolve_fmp_api_key
+
+    requested = (os.environ.get("TRADINGAGENTS_DATA_SOURCE") or "auto").strip().lower()
+    has_fmp = bool(resolve_fmp_api_key(config))
+    if requested == "fmp":
+        if not has_fmp:
+            raise TradingAgentsError(
+                "tradingagents_fmp_not_configured",
+                "TRADINGAGENTS_DATA_SOURCE=fmp 但未配置 FMP_API_KEY",
+            )
+        return "fmp"
+    if requested == "yfinance":
+        return "yfinance"
+    if requested != "auto":
+        raise TradingAgentsError(
+            "tradingagents_invalid_data_source",
+            f"TRADINGAGENTS_DATA_SOURCE 只能是 auto/fmp/yfinance，收到: {requested}",
+        )
+    return "fmp" if has_fmp else "yfinance"
+
+
 def _resolve_trade_date(trade_date: Optional[str]) -> str:
     if not trade_date:
         return date.today().isoformat()
@@ -283,11 +306,17 @@ class TradingAgentsService:
         selected = _resolve_analysts(analysts, list(getattr(self.config, "tradingagents_analysts", [])))
         run_date = _resolve_trade_date(trade_date)
         ta_config = build_tradingagents_config(self.config, build_default_config)
+        data_source = resolve_data_source(self.config)
+        if data_source == "fmp":
+            from src.services.tradingagents_fmp import apply_fmp_config, install_fmp_vendor, resolve_fmp_api_key
+
+            install_fmp_vendor(resolve_fmp_api_key(self.config))
+            apply_fmp_config(ta_config)
 
         logger.info(
-            "[TradingAgents] start code=%s ticker=%s date=%s provider=%s deep=%s quick=%s analysts=%s",
+            "[TradingAgents] start code=%s ticker=%s date=%s provider=%s deep=%s quick=%s analysts=%s data=%s",
             code, ticker, run_date, ta_config.get("llm_provider"),
-            ta_config.get("deep_think_llm"), ta_config.get("quick_think_llm"), ",".join(selected),
+            ta_config.get("deep_think_llm"), ta_config.get("quick_think_llm"), ",".join(selected), data_source,
         )
         graph = graph_cls(selected_analysts=tuple(selected), config=ta_config)
         state, rating = graph.propagate(ticker, run_date)
@@ -305,6 +334,7 @@ class TradingAgentsService:
             "llm_provider": ta_config.get("llm_provider"),
             "deep_think_llm": ta_config.get("deep_think_llm"),
             "quick_think_llm": ta_config.get("quick_think_llm"),
+            "data_source": data_source,
             "report_md_path": str(report_md_path),
             "report_html_path": str(report_html_path) if report_html_path.exists() else None,
         }

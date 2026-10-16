@@ -76,7 +76,28 @@ pip install -r requirements-tradingagents.txt   # 固定在 v0.6.0 tag
 
 ### 数据与行情
 
-TradingAgents 使用自己的数据源，**不走** DSA 的 `data_provider/` fallback 链：
+数据源由 `TRADINGAGENTS_DATA_SOURCE` 决定：
+
+| 取值 | 行为 |
+|---|---|
+| `auto`（默认） | 配置了 `FMP_API_KEY` 时用 FMP，否则用 TradingAgents 原生的 Yahoo Finance |
+| `fmp` | 强制 FMP；未配置 `FMP_API_KEY` 时报 `tradingagents_fmp_not_configured` |
+| `yfinance` | 强制 Yahoo Finance |
+
+**FMP 模式**（`src/services/tradingagents_fmp.py`）在不修改 TradingAgents 包的前提下替换它的数据通道，适合 Yahoo 对机房 IP 返回 429 的国内服务器：
+
+| 数据 | 来源 |
+|---|---|
+| 日线 OHLCV、技术指标、已核验行情快照、历史决策复盘收盘价 | FMP `historical-price-eod/dividend-adjusted` |
+| 公司身份（名称、行业、交易所） | FMP `profile` |
+| 基本面概览 | FMP `profile` + `quote` + `ratios-ttm` + `key-metrics-ttm`（仅当天运行提供，历史日期按 TradingAgents 规则不提供） |
+| 三大报表 | 先 SEC EDGAR（按申报值），再 FMP（按 `filingDate` 过滤到分析日） |
+| 个股新闻、全球新闻 | FMP `news/stock`、`news/general-latest` |
+| 内部人交易 | FMP `insider-trading/search`（按 `filingDate` 过滤） |
+
+当前 FMP 套餐**只覆盖美股**：港股、A 股代码会得到“数据不可用”提示，不会编造数据。情绪分析师依赖 StockTwits / Reddit，国内机房无法访问，建议把 `TRADINGAGENTS_ANALYSTS` 设为 `market,news,fundamentals`。
+
+**Yahoo 模式**下，TradingAgents 使用自己的数据源，**不走** DSA 的 `data_provider/` fallback 链：
 
 - 行情和新闻：Yahoo Finance
 - 美股财报：SEC EDGAR
