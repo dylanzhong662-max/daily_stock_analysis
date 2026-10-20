@@ -21,6 +21,10 @@ x-common: &common
   env_file:
     - ../.env
 
+  # 让容器可通过 host.docker.internal 访问宿主机服务（如 TRADINGAGENTS_SOCIAL_PROXY 指向的宿主机代理）
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
   volumes:
     - ../data:/app/data
     - ../logs:/app/logs

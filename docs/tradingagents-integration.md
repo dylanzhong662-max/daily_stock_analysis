@@ -95,7 +95,9 @@ pip install -r requirements-tradingagents.txt   # 固定在 v0.6.0 tag
 | 个股新闻、全球新闻 | FMP `news/stock`、`news/general-latest` |
 | 内部人交易 | FMP `insider-trading/search`（按 `filingDate` 过滤） |
 
-当前 FMP 套餐**只覆盖美股**：港股、A 股代码会得到“数据不可用”提示，不会编造数据。情绪分析师依赖 StockTwits / Reddit，国内机房无法访问，建议把 `TRADINGAGENTS_ANALYSTS` 设为 `market,news,fundamentals`。
+当前 FMP 套餐**只覆盖美股**：港股、A 股代码会得到“数据不可用”提示，不会编造数据。
+
+情绪分析师除新闻外还读取 StockTwits 和 Reddit，新闻分析师会查询 Polymarket 预测市场；这几个源国内机房直连不可达。设置 `TRADINGAGENTS_SOCIAL_PROXY`（如 `http://host.docker.internal:8118`，compose 已配置 `host.docker.internal` 指向宿主机）后，只有它们经代理访问（`src/services/tradingagents_proxy.py`），Reddit 遇到 429 限流会额外退避重试。StockTwits 对机房/代理 IP 仍可能返回 403，此时情绪分析只基于新闻 + Reddit。未配置代理时建议把 `TRADINGAGENTS_ANALYSTS` 设为 `market,news,fundamentals`。
 
 **Yahoo 模式**下，TradingAgents 使用自己的数据源，**不走** DSA 的 `data_provider/` fallback 链：
 

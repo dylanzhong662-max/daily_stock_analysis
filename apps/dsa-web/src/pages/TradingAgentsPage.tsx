@@ -30,7 +30,7 @@ const POLL_INTERVAL_MS = 3000;
 
 const ANALYST_LABELS: Record<TradingAgentsAnalyst, string> = {
   market: '技术面',
-  social: '情绪面（国内服务器不可用）',
+  social: '情绪面（Reddit，经代理）',
   news: '新闻面',
   fundamentals: '基本面',
 };

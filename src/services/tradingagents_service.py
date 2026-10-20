@@ -370,6 +370,9 @@ class TradingAgentsService:
 
             install_fmp_vendor(resolve_fmp_api_key(self.config))
             apply_fmp_config(ta_config)
+        from src.services.tradingagents_proxy import install_social_proxy
+
+        install_social_proxy()
 
         logger.info(
             "[TradingAgents] start code=%s ticker=%s date=%s provider=%s deep=%s quick=%s analysts=%s data=%s",
