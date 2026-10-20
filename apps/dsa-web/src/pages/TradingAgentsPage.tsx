@@ -72,6 +72,7 @@ const TradingAgentsPage: React.FC = () => {
   const [stockCode, setStockCode] = useState('');
   const [tradeDate, setTradeDate] = useState('');
   const [polymarketTopics, setPolymarketTopics] = useState('');
+  const [useDefaultPolymarket, setUseDefaultPolymarket] = useState(true);
   const [analysts, setAnalysts] = useState<TradingAgentsAnalyst[]>(['market', 'news', 'fundamentals']);
 
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -230,6 +231,7 @@ const TradingAgentsPage: React.FC = () => {
           .split(/[,，\n]/)
           .map((t) => t.trim())
           .filter(Boolean),
+        useDefaultPolymarket,
       });
       attachTask(accepted.taskId, accepted.message);
     } catch (err) {
@@ -285,14 +287,32 @@ const TradingAgentsPage: React.FC = () => {
                   disabled={running}
                 />
               </div>
-              <Input
-                label="Polymarket 参考主题（可选）"
-                placeholder="如 Anthropic IPO, OpenAI IPO"
-                hint="逗号分隔，最多 5 个。会抓取这些主题的预测市场隐含概率，作为所有分析角色的参考（如用 Anthropic 上市市值判断 AI 算力链）"
-                value={polymarketTopics}
-                onChange={(e) => setPolymarketTopics(e.target.value)}
-                disabled={running}
-              />
+              <div className="flex flex-col gap-2 rounded-xl border border-border/60 p-3">
+                <Checkbox
+                  label="自动加入 Polymarket 预测市场参考"
+                  checked={useDefaultPolymarket}
+                  onChange={(e) => setUseDefaultPolymarket(e.target.checked)}
+                  disabled={running}
+                />
+                {useDefaultPolymarket ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(status?.polymarketDefaultTopics ?? []).map((topic) => (
+                      <Badge key={topic}>{topic}</Badge>
+                    ))}
+                    {status?.polymarketTickerTopic ? (
+                      <Badge variant="info">{stockCode.trim().toUpperCase() || '本股代码'}</Badge>
+                    ) : null}
+                  </div>
+                ) : null}
+                <Input
+                  label="额外主题（可选）"
+                  placeholder="如 Nvidia GTC, Stargate"
+                  hint="逗号分隔，最多 5 个，与上面的默认主题合并；预测市场隐含概率会作为所有分析角色的参考"
+                  value={polymarketTopics}
+                  onChange={(e) => setPolymarketTopics(e.target.value)}
+                  disabled={running}
+                />
+              </div>
               <div className="flex flex-wrap gap-x-6 gap-y-2">
                 {TRADINGAGENTS_ANALYSTS.map((analyst) => (
                   <Checkbox

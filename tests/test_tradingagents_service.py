@@ -491,19 +491,14 @@ class PolymarketReferenceTest(unittest.TestCase):
                     return report_md
 
             modules = _fake_tradingagents_modules(FakeGraph)
-            poly = types.ModuleType("tradingagents.dataflows.vendors.polymarket")
-            poly.get_prediction_markets = lambda topic, limit=None, as_of_date=None: f"## markets for {topic}"
-            modules.update({
-                "tradingagents.dataflows": types.ModuleType("tradingagents.dataflows"),
-                "tradingagents.dataflows.vendors": types.ModuleType("tradingagents.dataflows.vendors"),
-                "tradingagents.dataflows.vendors.polymarket": poly,
-            })
             with _clean_env(), patch.dict(sys.modules, modules), \
-                    patch("src.services.tradingagents_proxy.install_social_proxy", return_value=None):
+                    patch("src.services.tradingagents_proxy.install_social_proxy", return_value=None), \
+                    patch("src.services.tradingagents_polymarket.build_reference",
+                          return_value=("## markets for Anthropic IPO", ["Fed decision", "Anthropic IPO"])):
                 result = TradingAgentsService(_config(litellm_model="deepseek/deepseek-chat")).analyze(
                     "NVDA", trade_date="2026-10-20", polymarket_topics=["Anthropic IPO"]
                 )
             self.assertIn("## markets for Anthropic IPO", created["state"]["instrument_context"])
-            self.assertEqual(result["polymarket_topics"], ["Anthropic IPO"])
+            self.assertEqual(result["polymarket_topics"], ["Fed decision", "Anthropic IPO"])
             saved = report_md.parent / "0_reference" / "polymarket.md"
             self.assertIn("Anthropic IPO", saved.read_text(encoding="utf-8"))

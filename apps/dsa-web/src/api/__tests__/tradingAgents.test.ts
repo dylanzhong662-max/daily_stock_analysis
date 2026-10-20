@@ -31,6 +31,7 @@ describe('tradingAgentsApi', () => {
       trade_date: undefined,
       analysts: ['market', 'news'],
       polymarket_topics: undefined,
+      use_default_polymarket: true,
     });
 
     post.mockResolvedValueOnce({ data: { task_id: 't2' } });

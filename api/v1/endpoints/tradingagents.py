@@ -53,8 +53,9 @@ class TradingAgentsTaskRequest(BaseModel):
     trade_date: Optional[str] = Field(None, description="YYYY-MM-DD，默认今天")
     analysts: Optional[List[str]] = Field(None, description="market/social/news/fundamentals 子集，默认取配置")
     polymarket_topics: Optional[List[str]] = Field(
-        None, description="Polymarket 参考主题（最多 5 个），如 ['Anthropic IPO']，抓取后作为所有角色的参考"
+        None, description="额外的 Polymarket 参考主题（最多 5 个），如 ['Anthropic IPO']，与默认主题合并"
     )
+    use_default_polymarket: bool = Field(True, description="是否自动加入默认 Polymarket 参考主题与本股市场")
 
 
 class TradingAgentsTaskAccepted(BaseModel):
@@ -112,6 +113,7 @@ def tradingagents_start_task(
                 trade_date=request.trade_date,
                 analysts=request.analysts,
                 polymarket_topics=request.polymarket_topics,
+                use_default_polymarket=request.use_default_polymarket,
             )
         finally:
             with _run_lock:

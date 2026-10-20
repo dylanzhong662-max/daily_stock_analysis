@@ -27,6 +27,7 @@ from src.config import (
     get_api_keys_for_model,
 )
 from src.report_language import localize_operation_advice, normalize_report_language
+from src.services.tradingagents_polymarket import default_topics, ticker_topic_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -340,20 +341,6 @@ def _normalize_topics(topics: Optional[List[str]]) -> List[str]:
     return cleaned
 
 
-def build_polymarket_reference(topics: List[str], run_date: str, limit: int = 6) -> str:
-    """抓取用户指定主题的 Polymarket 预测市场，拼成注入给所有角色的参考块。"""
-    from tradingagents.dataflows.vendors.polymarket import get_prediction_markets
-
-    blocks = [get_prediction_markets(topic, limit=limit, as_of_date=run_date) for topic in topics]
-    return (
-        "# User-specified prediction-market reference (Polymarket)\n"
-        "The user asked every role to consider the following live prediction markets as a "
-        "reference signal for this instrument (e.g. private-company valuations or IPO odds "
-        "that drive the sector). Treat the probabilities as crowd-priced odds, not facts; "
-        "explain how, if at all, they bear on the instrument.\n\n" + "\n\n".join(blocks)
-    )
-
-
 def _inject_context(graph: Any, extra: str) -> None:
     """把参考块追加到每个角色都会读取的 instrument_context。"""
     original = graph.create_run_state
@@ -383,6 +370,8 @@ class TradingAgentsService:
             "available": available,
             "version": version,
             "analysts": list(getattr(self.config, "tradingagents_analysts", SUPPORTED_ANALYSTS)),
+            "polymarket_default_topics": default_topics(),
+            "polymarket_ticker_topic": ticker_topic_enabled(),
         }
 
     def ensure_ready(self) -> None:
@@ -401,6 +390,7 @@ class TradingAgentsService:
         trade_date: Optional[str] = None,
         analysts: Optional[List[str]] = None,
         polymarket_topics: Optional[List[str]] = None,
+        use_default_polymarket: bool = True,
     ) -> Dict[str, Any]:
         self.ensure_ready()
         topics = _normalize_topics(polymarket_topics)
@@ -426,7 +416,13 @@ class TradingAgentsService:
             ta_config.get("deep_think_llm"), ta_config.get("quick_think_llm"), ",".join(selected), data_source,
         )
         graph = graph_cls(selected_analysts=tuple(selected), config=ta_config)
-        reference = build_polymarket_reference(topics, run_date) if topics else ""
+        from src.services.tradingagents_polymarket import build_reference
+
+        try:
+            reference, used_topics = build_reference(ticker, run_date, topics, use_default_polymarket)
+        except Exception as exc:  # 参考信息是增强项，失败不影响研究
+            logger.warning("[TradingAgents] Polymarket reference unavailable: %s", exc)
+            reference, used_topics = "", []
         if reference:
             _inject_context(graph, reference)
         state, rating = graph.propagate(ticker, run_date)
@@ -445,7 +441,7 @@ class TradingAgentsService:
             "ticker": ticker,
             "trade_date": run_date,
             "analysts": selected,
-            "polymarket_topics": topics,
+            "polymarket_topics": used_topics,
             "rating": rating,
             "operation_advice": rating_to_operation_advice(rating, report_language),
             "llm_provider": ta_config.get("llm_provider"),

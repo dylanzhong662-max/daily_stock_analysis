@@ -11,6 +11,8 @@ export type TradingAgentsStatus = {
   available: boolean;
   version?: string | null;
   analysts: TradingAgentsAnalyst[];
+  polymarketDefaultTopics?: string[];
+  polymarketTickerTopic?: boolean;
 };
 
 export type TradingAgentsTaskAccepted = {
@@ -68,6 +70,7 @@ export type StartTradingAgentsTaskPayload = {
   tradeDate?: string;
   analysts?: TradingAgentsAnalyst[];
   polymarketTopics?: string[];
+  useDefaultPolymarket?: boolean;
 };
 
 const BASE = '/api/v1/tradingagents';
@@ -84,6 +87,7 @@ export const tradingAgentsApi = {
       trade_date: payload.tradeDate || undefined,
       analysts: payload.analysts,
       polymarket_topics: payload.polymarketTopics?.length ? payload.polymarketTopics : undefined,
+      use_default_polymarket: payload.useDefaultPolymarket ?? true,
     });
     return toCamelCase<TradingAgentsTaskAccepted>(response.data);
   },

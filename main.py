@@ -462,7 +462,7 @@ def parse_arguments() -> argparse.Namespace:
         type=str,
         default=None,
         metavar='TOPICS',
-        help='TradingAgents 的 Polymarket 参考主题，逗号分隔（最多 5 个），如 "Anthropic IPO,OpenAI IPO"'
+        help='额外的 Polymarket 参考主题，逗号分隔（最多 5 个），与默认主题（TRADINGAGENTS_POLYMARKET_TOPICS）合并'
     )
 
     return parser.parse_args()
