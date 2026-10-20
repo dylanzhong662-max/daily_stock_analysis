@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 import threading
 import time
 from types import SimpleNamespace
@@ -26,8 +27,9 @@ logger = logging.getLogger(__name__)
 
 SOCIAL_PROXY_ENV = "TRADINGAGENTS_SOCIAL_PROXY"
 DISABLE_STOCKTWITS_ENV = "TRADINGAGENTS_DISABLE_STOCKTWITS"
+# 匿名 RSS 约每分钟 1 次/IP，共享代理出口常被 429；退避 10s/20s（TradingAgents 自身再按 Retry-After 重试一次）
 _RETRY_429_ATTEMPTS = 3
-_RETRY_429_BASE_SECONDS = 4.0
+_RETRY_429_BASE_SECONDS = 10.0
 
 _lock = threading.Lock()
 _installed_proxy: Optional[str] = None
@@ -49,7 +51,7 @@ def _proxied_urlopen(proxy: str, *, retry_429: bool):
             except HTTPError as exc:
                 if exc.code != 429 or attempt == attempts:
                     raise
-                wait = _RETRY_429_BASE_SECONDS * attempt * random.uniform(0.8, 1.2)
+                wait = _RETRY_429_BASE_SECONDS * attempt * random.uniform(0.9, 1.1)
                 logger.info("[TradingAgents] proxy 429 for %s, retry %d/%d in %.1fs",
                             getattr(req, "host", "?"), attempt, attempts - 1, wait)
                 time.sleep(wait)
@@ -104,3 +106,68 @@ def disable_stocktwits_if_configured() -> bool:
 
     sentiment_analyst.fetch_stocktwits_messages = _stocktwits_disabled_block
     return True
+
+
+# ---------------------------------------------------------------------------
+# Reddit 覆盖面：默认只搜 3 个版块、只按代码搜、每版块最多 5 帖，样本太小
+# ---------------------------------------------------------------------------
+
+REDDIT_SUBREDDITS = ("wallstreetbets", "stocks", "investing", "StockMarket", "semiconductors", "ValueInvesting")
+# 已确认存在的个股版块（不存在的版块会让合并搜索整体失败，所以只用白名单）
+TICKER_SUBREDDITS = {"NVDA": "NVDA_Stock", "AMD": "AMD_Stock"}
+REDDIT_POSTS_PER_SUB = 8
+_NAME_SUFFIX_RE = re.compile(
+    r"[,.]?\s+(inc|incorporated|corp|corporation|co|company|ltd|limited|plc|holdings?|group|n\.?v|s\.?a|ag)\.?$",
+    re.IGNORECASE,
+)
+_search_names: dict = {}
+
+
+def company_search_name(company_name: str) -> str:
+    """'NVIDIA Corporation' -> 'NVIDIA'，'Broadcom Inc.' -> 'Broadcom'。"""
+    name = (company_name or "").strip()
+    for _ in range(3):
+        stripped = _NAME_SUFFIX_RE.sub("", name).strip()
+        if stripped == name:
+            break
+        name = stripped
+    return name
+
+
+def tune_reddit(ticker: str, company_name: Optional[str] = None) -> None:
+    """扩大情绪分析师的 Reddit 覆盖：更多版块、按“代码 OR 公司名”搜、每版块 8 帖。"""
+    from urllib.parse import urlencode
+
+    from tradingagents.agents.analysts import sentiment_analyst
+    from tradingagents.dataflows.vendors import reddit
+
+    symbol = (ticker or "").split(".")[0].upper()
+    name = company_search_name(company_name or "")
+    if symbol and name and name.upper() != symbol:
+        _search_names[symbol] = name
+
+    if getattr(sentiment_analyst, "_dsa_reddit_tuned", False):
+        return
+    original_subreddits_for = reddit.subreddits_for
+    original_fetch = reddit.fetch_reddit_posts
+
+    def subreddits_for(t: str):
+        default = original_subreddits_for(t)
+        if tuple(default) != tuple(reddit.DEFAULT_SUBREDDITS):
+            return default  # 加密货币等特殊映射保持原样
+        extra = TICKER_SUBREDDITS.get((t or "").split(".")[0].upper())
+        return REDDIT_SUBREDDITS + ((extra,) if extra else ())
+
+    def search_qs(t: str, limit: int) -> str:
+        name_ = _search_names.get((t or "").upper())
+        query = f'{t} OR "{name_}"' if name_ else t
+        return urlencode({"q": query, "restrict_sr": "on", "sort": "new", "t": "week", "limit": limit})
+
+    def fetch_reddit_posts(t, subreddits=None, **kwargs):
+        kwargs.setdefault("limit_per_sub", REDDIT_POSTS_PER_SUB)
+        return original_fetch(t, subreddits, **kwargs)
+
+    reddit._search_qs = search_qs
+    sentiment_analyst.subreddits_for = subreddits_for
+    sentiment_analyst.fetch_reddit_posts = fetch_reddit_posts
+    sentiment_analyst._dsa_reddit_tuned = True

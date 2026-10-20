@@ -99,7 +99,9 @@ pip install -r requirements-tradingagents.txt   # 固定在 v0.6.0 tag
 
 ETF/基金（如 SMH、GLD）没有公司财报：FMP 模式下基本面改为基金概况（规模、费率、NAV、持仓数、行业/国家暴露），三大报表返回“不适用”。
 
-情绪分析师除新闻外还读取 StockTwits 和 Reddit，新闻分析师会查询 Polymarket 预测市场；这几个源国内机房直连不可达。设置 `TRADINGAGENTS_SOCIAL_PROXY`（如 `http://host.docker.internal:8118`，compose 已配置 `host.docker.internal` 指向宿主机）后，只有它们经代理访问（`src/services/tradingagents_proxy.py`），Reddit 遇到 429 限流会额外退避重试。StockTwits 对机房/代理 IP 仍可能返回 403，此时情绪分析只基于新闻 + Reddit。可设 `TRADINGAGENTS_DISABLE_STOCKTWITS=true` 直接跳过 StockTwits。未配置代理时建议把 `TRADINGAGENTS_ANALYSTS` 设为 `market,news,fundamentals`。
+情绪分析师除新闻外还读取 StockTwits 和 Reddit，新闻分析师会查询 Polymarket 预测市场；这几个源国内机房直连不可达。设置 `TRADINGAGENTS_SOCIAL_PROXY`（如 `http://host.docker.internal:8118`，compose 已配置 `host.docker.internal` 指向宿主机）后，只有它们经代理访问（`src/services/tradingagents_proxy.py`），Reddit 遇到 429 限流会额外退避重试。StockTwits 对机房/代理 IP 仍可能返回 403，此时情绪分析只基于新闻 + Reddit。可设 `TRADINGAGENTS_DISABLE_STOCKTWITS=true` 直接跳过 StockTwits。
+
+Reddit 覆盖面（`tune_reddit`）：原版只按股票代码在 3 个版块搜、每版块 5 帖；现在按“代码 OR 公司名”（公司名来自 FMP，如 `NVDA OR "NVIDIA"`）在 wallstreetbets / stocks / investing / StockMarket / semiconductors / ValueInvesting（NVDA、AMD 另加个股版块）合并搜索、每版块 8 帖；仍是一次请求，遇 429 退避重试。RSS 不含点赞/评论数，帖子热度无法判断。未配置代理时建议把 `TRADINGAGENTS_ANALYSTS` 设为 `market,news,fundamentals`。
 
 **Yahoo 模式**下，TradingAgents 使用自己的数据源，**不走** DSA 的 `data_provider/` fallback 链：
 

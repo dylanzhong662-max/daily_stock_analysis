@@ -409,6 +409,20 @@ class TradingAgentsService:
         from src.services.tradingagents_proxy import disable_stocktwits_if_configured, install_social_proxy
 
         install_social_proxy()
+        company_name = None
+        if data_source == "fmp":
+            from src.services.tradingagents_fmp import get_company_profile
+
+            try:
+                company_name = get_company_profile(ticker).get("longName")
+            except Exception as exc:  # 公司名只用于扩大 Reddit 搜索，失败就只按代码搜
+                logger.info("[TradingAgents] company name lookup failed for %s: %s", ticker, exc)
+        from src.services.tradingagents_proxy import tune_reddit
+
+        try:
+            tune_reddit(ticker, company_name)
+        except Exception as exc:  # 只是扩大情绪数据覆盖，失败不影响研究
+            logger.warning("[TradingAgents] Reddit tuning skipped: %s", exc)
         disable_stocktwits_if_configured()
 
         logger.info(

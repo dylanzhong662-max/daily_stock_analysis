@@ -115,6 +115,11 @@ def _format_event(event: Dict, markets: List[Dict], parse) -> Optional[str]:
                 f"(${volume:,.0f} volume, resolves {resolves}{_week(markets[0])}){thin}")
     exclusive = bool(event.get("negRisk"))
     note = "mutually exclusive outcomes" if exclusive else "separate yes/no markets"
+    if exclusive:
+        total = sum((_prob(m, parse) or ("", 0.0))[1] for m in markets)
+        if abs(total - 1.0) > 0.15:
+            # Polymarket 偶有档位概率之和明显偏离 100%（如某档单独挂牌），提示模型谨慎解读
+            note += f"; outcome prices sum to {total:.0%}, so read them as loose odds"
     lines = [f"- **{title}** (${volume:,.0f} volume, {note}){thin}"]
     if exclusive:
         # 分档事件保留原始档位顺序；档位过多时只留概率最高的几档

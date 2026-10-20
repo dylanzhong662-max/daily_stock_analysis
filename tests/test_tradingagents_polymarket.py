@@ -118,6 +118,20 @@ class PolymarketReferenceTest(unittest.TestCase):
         self.assertLess(nvda.index("DC revenue"), nvda.index("hit $192"))  # 财报类优先
         self.assertIn("thin market", nvda)  # $900 < THIN_VOLUME
 
+    def test_inconsistent_bucket_sum_is_flagged(self):
+        event = _event("e-ipo", "Largest IPO by market cap in 2026?", [
+            _market("a", "SpaceX", 1_000_000, prob="0.70", group="SpaceX"),
+            _market("b", "Anthropic", 1_000_000, prob="0.29", group="Anthropic"),
+            _market("c", "xAI", 1_000_000, prob="0.26", group="xAI"),
+        ], neg_risk=True)
+        text = pm._format_event(event, event["markets"], lambda v: json.loads(v))
+        self.assertIn("outcome prices sum to 125%", text)
+        ok = _event("e-ok", "Fed Decision in October?", [
+            _market("x", "No change", 1, prob="0.86", group="No change"),
+            _market("y", "Hike", 1, prob="0.14", group="25 bps increase"),
+        ], neg_risk=True)
+        self.assertNotIn("sum to", pm._format_event(ok, ok["markets"], lambda v: json.loads(v)))
+
     def test_historical_date_withholds_without_network(self):
         modules, calls = _fake_modules({}, historical=True)
         with self._env(), patch.dict(sys.modules, modules):

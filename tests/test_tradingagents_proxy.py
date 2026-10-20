@@ -48,6 +48,46 @@ class ProxyUrlopenTest(unittest.TestCase):
         with patch.dict(os.environ, {px.SOCIAL_PROXY_ENV: ""}):
             self.assertIsNone(px.install_social_proxy())
 
+    def test_company_search_name_strips_suffixes(self):
+        from src.services import tradingagents_proxy as px
+
+        self.assertEqual(px.company_search_name("NVIDIA Corporation"), "NVIDIA")
+        self.assertEqual(px.company_search_name("Broadcom Inc."), "Broadcom")
+        self.assertEqual(px.company_search_name("Micron Technology, Inc."), "Micron Technology")
+        self.assertEqual(px.company_search_name("Taiwan Semiconductor Manufacturing Company Limited"),
+                         "Taiwan Semiconductor Manufacturing")
+
+    @unittest.skipUnless(_HAS_TA, "tradingagents not installed")
+    def test_tune_reddit_widens_search(self):
+        from urllib.parse import parse_qs
+
+        from tradingagents.agents.analysts import sentiment_analyst
+        from tradingagents.dataflows.vendors import reddit
+
+        from src.services import tradingagents_proxy as px
+
+        saved = (reddit._search_qs, sentiment_analyst.subreddits_for, sentiment_analyst.fetch_reddit_posts)
+
+        def restore():
+            reddit._search_qs, sentiment_analyst.subreddits_for, sentiment_analyst.fetch_reddit_posts = saved
+            sentiment_analyst._dsa_reddit_tuned = False
+            px._search_names.clear()
+
+        self.addCleanup(restore)
+        sentiment_analyst._dsa_reddit_tuned = False
+        with patch.object(reddit, "fetch_reddit_posts") as fetch:
+            px.tune_reddit("NVDA", "NVIDIA Corporation")
+            subs = sentiment_analyst.subreddits_for("NVDA")
+            self.assertIn("semiconductors", subs)
+            self.assertIn("NVDA_Stock", subs)
+            self.assertNotIn("NVDA_Stock", sentiment_analyst.subreddits_for("AVGO"))
+            self.assertEqual(parse_qs(reddit._search_qs("NVDA", 100))["q"], ['NVDA OR "NVIDIA"'])
+            self.assertEqual(parse_qs(reddit._search_qs("ZZZ", 100))["q"], ["ZZZ"])
+            sentiment_analyst.fetch_reddit_posts("NVDA", subs, start_date="2026-10-13", end_date="2026-10-20")
+        self.assertEqual(fetch.call_args.kwargs["limit_per_sub"], px.REDDIT_POSTS_PER_SUB)
+        # 加密货币版块映射不受影响
+        self.assertIn("CryptoCurrency", sentiment_analyst.subreddits_for("BTC-USD"))
+
     @unittest.skipUnless(_HAS_TA, "tradingagents not installed")
     def test_disable_stocktwits_only_when_configured(self):
         from tradingagents.agents.analysts import sentiment_analyst
