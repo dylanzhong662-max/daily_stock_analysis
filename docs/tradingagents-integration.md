@@ -97,7 +97,9 @@ pip install -r requirements-tradingagents.txt   # 固定在 v0.6.0 tag
 
 当前 FMP 套餐**只覆盖美股**：港股、A 股代码会得到“数据不可用”提示，不会编造数据。
 
-情绪分析师除新闻外还读取 StockTwits 和 Reddit，新闻分析师会查询 Polymarket 预测市场；这几个源国内机房直连不可达。设置 `TRADINGAGENTS_SOCIAL_PROXY`（如 `http://host.docker.internal:8118`，compose 已配置 `host.docker.internal` 指向宿主机）后，只有它们经代理访问（`src/services/tradingagents_proxy.py`），Reddit 遇到 429 限流会额外退避重试。StockTwits 对机房/代理 IP 仍可能返回 403，此时情绪分析只基于新闻 + Reddit。未配置代理时建议把 `TRADINGAGENTS_ANALYSTS` 设为 `market,news,fundamentals`。
+ETF/基金（如 SMH、GLD）没有公司财报：FMP 模式下基本面改为基金概况（规模、费率、NAV、持仓数、行业/国家暴露），三大报表返回“不适用”。
+
+情绪分析师除新闻外还读取 StockTwits 和 Reddit，新闻分析师会查询 Polymarket 预测市场；这几个源国内机房直连不可达。设置 `TRADINGAGENTS_SOCIAL_PROXY`（如 `http://host.docker.internal:8118`，compose 已配置 `host.docker.internal` 指向宿主机）后，只有它们经代理访问（`src/services/tradingagents_proxy.py`），Reddit 遇到 429 限流会额外退避重试。StockTwits 对机房/代理 IP 仍可能返回 403，此时情绪分析只基于新闻 + Reddit。可设 `TRADINGAGENTS_DISABLE_STOCKTWITS=true` 直接跳过 StockTwits。未配置代理时建议把 `TRADINGAGENTS_ANALYSTS` 设为 `market,news,fundamentals`。
 
 **Yahoo 模式**下，TradingAgents 使用自己的数据源，**不走** DSA 的 `data_provider/` fallback 链：
 
@@ -136,14 +138,14 @@ DSA 代码会自动转换成 Yahoo 格式：`600519` → `600519.SS`，`hk00700`
 
 | 主题 | 典型市场 |
 |---|---|
-| `Fed decision`、`rate hike` | 下次议息会议不变/加息 25bp 概率、2026 年再加息次数 |
-| `recession`、`inflation` | 美国 2026 年衰退、通胀超 4.5%/5% |
+| `Fed decision`、`Fed rate hike` | 下次议息会议各结果概率、2026 年加息次数分布 |
+| `US recession`、`inflation` | 美国 2026 年衰退、通胀超 4.5%/5% |
 | `Anthropic IPO`、`OpenAI IPO` | 年内 IPO 概率、IPO 当日市值区间 |
 | `AI bubble` | AI 泡沫 2026 年破裂 |
 | `China Taiwan`、`chip export` | 台海冲突、AI 芯片出口管制立法 |
 | 本股代码（如 `NVDA`） | 财报类（数据中心营收、毛利率）优先，其次价格区间 |
 
-每个主题取成交量最高的 4 个未结算市场（本股 6 个），跨主题去重；单个主题失败只标注“不可用”。参考块注入到**所有角色**共享的上下文，并保存为报告的 `0_reference/polymarket.md`。新闻分析师本身也可按需调用 Polymarket 工具。
+按 Polymarket **事件**分组：每个主题取成交量最高的 2 个事件（本股 3 个，财报类优先），互斥分档事件（如“2026 年加息次数”“Anthropic IPO 当日市值区间”）给出完整概率分布，“截至某日”类事件按到期日排序；事件成交量低于 $20k（本股 $500）的过滤，低于 $5k 的标注为薄市场；跨主题按事件去重；单个主题失败只标注“不可用”。参考块注入到**所有角色**共享的上下文，并保存为报告的 `0_reference/polymarket.md`。新闻分析师本身也可按需调用 Polymarket 工具。
 
 - `TRADINGAGENTS_POLYMARKET_TOPICS`：覆盖默认主题（逗号分隔），`none` 关闭。
 - `TRADINGAGENTS_POLYMARKET_TICKER=false`：不搜索本股市场。

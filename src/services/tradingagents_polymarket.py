@@ -6,7 +6,9 @@
 
 - 默认主题可用 ``TRADINGAGENTS_POLYMARKET_TOPICS`` 覆盖（逗号分隔，``none`` 关闭）。
 - ``TRADINGAGENTS_POLYMARKET_TICKER=false`` 关闭按股票代码搜索本股市场。
-- 跨主题按 market id 去重；个股主题优先财报类市场（营收/毛利率/EPS）。
+- 按 Polymarket 事件分组展示（事件标题 + 各档位概率），互斥分档事件给出完整分布，
+  避免把同一事件的不同档位误读为相互矛盾；跨主题按事件去重。
+- 过滤低成交量事件（默认主题 < $20k、个股 < $500），个股主题优先财报类事件。
 - 单个主题失败只记一行“不可用”，不影响研究；历史日期不提供（Polymarket 只有实时赔率）。
 """
 
@@ -27,8 +29,8 @@ TICKER_ENV = "TRADINGAGENTS_POLYMARKET_TICKER"
 # AI 泡沫、台海（台积电供应链）、芯片出口管制
 DEFAULT_TOPICS: Tuple[str, ...] = (
     "Fed decision",
-    "rate hike",
-    "recession",
+    "Fed rate hike",
+    "US recession",
     "inflation",
     "Anthropic IPO",
     "OpenAI IPO",
@@ -37,8 +39,12 @@ DEFAULT_TOPICS: Tuple[str, ...] = (
     "chip export",
 )
 
-MARKETS_PER_TOPIC = 4
-MARKETS_FOR_TICKER = 6
+EVENTS_PER_TOPIC = 2
+EVENTS_FOR_TICKER = 3
+MARKETS_PER_EVENT = 8
+MIN_EVENT_VOLUME = 20_000
+MIN_TICKER_EVENT_VOLUME = 500
+THIN_VOLUME = 5_000
 _FUNDAMENTAL_RE = re.compile(r"revenue|margin|eps|earnings|guidance|data center", re.IGNORECASE)
 
 
@@ -71,19 +77,52 @@ def resolve_topics(ticker: str, extra: List[str], use_defaults: bool) -> List[Tu
     return unique
 
 
-def _format_market(m: Dict, parse) -> Optional[str]:
+def _prob(m: Dict, parse) -> Optional[Tuple[str, float]]:
     prices, outcomes = parse(m.get("outcomePrices")), parse(m.get("outcomes"))
     try:
-        prob = float(prices[0])
+        return (outcomes[0] if outcomes else "Yes"), float(prices[0])
     except (ValueError, IndexError, TypeError):
         return None
-    label = outcomes[0] if outcomes else "Yes"
+
+
+def _week(m: Dict) -> str:
     wk = m.get("oneWeekPriceChange")
-    wk_str = f", 1-week {wk * 100:+.1f}pp" if isinstance(wk, (int, float)) and wk else ""
-    return (
-        f"- **{m.get('question')}** — {label} {prob:.0%} "
-        f"(${(m.get('volumeNum') or 0):,.0f} volume, resolves {(m.get('endDate') or '')[:10]}{wk_str})"
-    )
+    return f", 1w {wk * 100:+.1f}pp" if isinstance(wk, (int, float)) and wk else ""
+
+
+def _event_volume(event: Dict, markets: List[Dict]) -> float:
+    return float(event.get("volume") or sum(m.get("volumeNum") or 0 for m in markets))
+
+
+def _format_event(event: Dict, markets: List[Dict], parse) -> Optional[str]:
+    volume = _event_volume(event, markets)
+    thin = " — thin market, low information" if volume < THIN_VOLUME else ""
+    title = event.get("title") or markets[0].get("question") or "?"
+    resolves = (markets[0].get("endDate") or "")[:10]
+    if len(markets) == 1:
+        prob = _prob(markets[0], parse)
+        if not prob:
+            return None
+        label, p = prob
+        return (f"- **{markets[0].get('question') or title}** — {label} {p:.0%} "
+                f"(${volume:,.0f} volume, resolves {resolves}{_week(markets[0])}){thin}")
+    exclusive = bool(event.get("negRisk"))
+    note = "mutually exclusive outcomes, probabilities sum to ~100%" if exclusive else "separate yes/no markets"
+    lines = [f"- **{title}** (${volume:,.0f} volume, {note}){thin}"]
+    if exclusive:
+        # 分档事件保留原始档位顺序；档位过多时只留概率最高的几档
+        keep = sorted(markets, key=lambda m: -((_prob(m, parse) or ("", 0.0))[1]))[:MARKETS_PER_EVENT]
+        shown = [m for m in markets if m in keep]
+    else:
+        # “截至某日”类事件按到期日排序，读成一条时间曲线
+        shown = sorted(markets, key=lambda m: m.get("endDate") or "")[:MARKETS_PER_EVENT]
+    for m in shown:
+        prob = _prob(m, parse)
+        if not prob:
+            continue
+        label = m.get("groupItemTitle") or m.get("question") or "?"
+        lines.append(f"  - {label}: {prob[1]:.0%} (resolves {(m.get('endDate') or '')[:10]}{_week(m)})")
+    return "\n".join(lines) if len(lines) > 1 else None
 
 
 def build_reference(ticker: str, run_date: str, extra: List[str], use_defaults: bool = True) -> Tuple[str, List[str]]:
@@ -111,7 +150,7 @@ def build_reference(ticker: str, run_date: str, extra: List[str], use_defaults: 
     from tradingagents.dataflows.vendors import polymarket
 
     now = datetime.now(UTC)
-    seen_ids = set()
+    seen_events = set()
     sections = []
     for topic, kind in topics:
         try:
@@ -120,30 +159,32 @@ def build_reference(ticker: str, run_date: str, extra: List[str], use_defaults: 
             logger.info("[TradingAgents/Polymarket] search failed for %r: %s", topic, exc)
             sections.append(f'## "{topic}"\nUnavailable right now ({type(exc).__name__}).')
             continue
-        markets = [
-            m for event in data.get("events", []) for m in event.get("markets", [])
-            if polymarket._is_forward_looking(m, now)
-        ]
-        if kind == "ticker":
-            markets.sort(key=lambda m: (not _FUNDAMENTAL_RE.search(m.get("question") or ""), -(m.get("volumeNum") or 0)))
-            limit = MARKETS_FOR_TICKER
-        else:
-            markets.sort(key=lambda m: -(m.get("volumeNum") or 0))
-            limit = MARKETS_PER_TOPIC
-        lines = []
-        for m in markets:
-            key = m.get("id") or m.get("conditionId") or m.get("question")
-            if key in seen_ids:
+        min_volume = MIN_TICKER_EVENT_VOLUME if kind == "ticker" else MIN_EVENT_VOLUME
+        candidates = []
+        for event in data.get("events", []):
+            key = event.get("id") or event.get("slug") or event.get("title")
+            markets = [m for m in event.get("markets", []) if polymarket._is_forward_looking(m, now)]
+            if not markets or key in seen_events or _event_volume(event, markets) < min_volume:
                 continue
-            line = _format_market(m, polymarket._parse_json_list)
-            if line:
-                seen_ids.add(key)
-                lines.append(line)
-            if len(lines) >= limit:
+            candidates.append((key, event, markets))
+        if kind == "ticker":
+            candidates.sort(key=lambda c: (not _FUNDAMENTAL_RE.search(c[1].get("title") or ""),
+                                           -_event_volume(c[1], c[2])))
+            limit = EVENTS_FOR_TICKER
+        else:
+            candidates.sort(key=lambda c: -_event_volume(c[1], c[2]))
+            limit = EVENTS_PER_TOPIC
+        blocks = []
+        for key, event, markets in candidates:
+            block = _format_event(event, markets, polymarket._parse_json_list)
+            if block:
+                seen_events.add(key)
+                blocks.append(block)
+            if len(blocks) >= limit:
                 break
-        if lines:
+        if blocks:
             title = f'## "{topic}"' + (" (markets on this company)" if kind == "ticker" else "")
-            sections.append(title + "\n" + "\n".join(lines))
+            sections.append(title + "\n" + "\n".join(blocks))
     if not sections:
         return header + "No open prediction markets matched the reference topics.\n", names
     return header + "\n\n".join(sections) + "\n", names

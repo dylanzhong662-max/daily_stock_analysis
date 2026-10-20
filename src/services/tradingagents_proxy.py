@@ -25,6 +25,7 @@ from urllib.request import ProxyHandler, build_opener
 logger = logging.getLogger(__name__)
 
 SOCIAL_PROXY_ENV = "TRADINGAGENTS_SOCIAL_PROXY"
+DISABLE_STOCKTWITS_ENV = "TRADINGAGENTS_DISABLE_STOCKTWITS"
 _RETRY_429_ATTEMPTS = 3
 _RETRY_429_BASE_SECONDS = 4.0
 
@@ -86,3 +87,20 @@ def install_social_proxy(proxy: Optional[str] = None) -> Optional[str]:
         _installed_proxy = proxy
         logger.info("[TradingAgents] social/prediction-market sources routed via proxy")
         return proxy
+
+
+def _stocktwits_disabled_block(ticker: str, *args, **kwargs) -> str:
+    return (
+        f"<StockTwits not queried for {ticker}: the source blocks this server (HTTP 403), "
+        f"so it is disabled. This is not an absence of discussion; rely on the other sources.>"
+    )
+
+
+def disable_stocktwits_if_configured() -> bool:
+    """``TRADINGAGENTS_DISABLE_STOCKTWITS=true`` 时跳过 StockTwits（服务器 IP 被拦截时省去必然失败的请求）。"""
+    if (os.environ.get(DISABLE_STOCKTWITS_ENV) or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return False
+    from tradingagents.agents.analysts import sentiment_analyst
+
+    sentiment_analyst.fetch_stocktwits_messages = _stocktwits_disabled_block
+    return True

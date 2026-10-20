@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 新增 `TRADINGAGENTS_SOCIAL_PROXY`：情绪分析师的 Reddit/StockTwits 与 Polymarket 预测市场经代理访问（其余数据源直连），Reddit 429 自动退避重试；compose 增加 `host.docker.internal` 映射。
 - [新功能] TradingAgents 支持指定 Polymarket 参考主题（页面输入框 / API `polymarket_topics` / CLI `--tradingagents-polymarket`），预测市场赔率作为所有角色的参考并保存在报告中。
 - [改进] TradingAgents 每次研究自动加入默认 Polymarket 参考（利率/衰退/通胀、Anthropic/OpenAI IPO、AI 泡沫、台海、芯片出口管制、本股财报市场），跨主题去重；可用 `TRADINGAGENTS_POLYMARKET_TOPICS` / `TRADINGAGENTS_POLYMARKET_TICKER` 配置，页面可单次关闭或追加主题。
+- [改进] Polymarket 参考按事件分组展示完整分档分布并过滤低成交量/无关事件；FMP 模式下 ETF 基本面改为基金概况、报表返回“不适用”；新增 `TRADINGAGENTS_DISABLE_STOCKTWITS`。
+- [修复] FMP 模式下历史决策复盘在持有窗口尚未交易时不再报“无数据”失败，按原逻辑留待下次复盘。
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->

@@ -49,6 +49,21 @@ class ProxyUrlopenTest(unittest.TestCase):
             self.assertIsNone(px.install_social_proxy())
 
     @unittest.skipUnless(_HAS_TA, "tradingagents not installed")
+    def test_disable_stocktwits_only_when_configured(self):
+        from tradingagents.agents.analysts import sentiment_analyst
+
+        from src.services import tradingagents_proxy as px
+
+        original = sentiment_analyst.fetch_stocktwits_messages
+        self.addCleanup(setattr, sentiment_analyst, "fetch_stocktwits_messages", original)
+        with patch.dict(os.environ, {px.DISABLE_STOCKTWITS_ENV: ""}):
+            self.assertFalse(px.disable_stocktwits_if_configured())
+        self.assertIs(sentiment_analyst.fetch_stocktwits_messages, original)
+        with patch.dict(os.environ, {px.DISABLE_STOCKTWITS_ENV: "true"}):
+            self.assertTrue(px.disable_stocktwits_if_configured())
+        self.assertIn("not queried for NVDA", sentiment_analyst.fetch_stocktwits_messages("NVDA", limit=30))
+
+    @unittest.skipUnless(_HAS_TA, "tradingagents not installed")
     def test_install_patches_vendor_modules(self):
         from tradingagents.dataflows.vendors import polymarket, reddit, stocktwits
 

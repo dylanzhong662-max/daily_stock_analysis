@@ -121,11 +121,15 @@ class FmpAdapterTest(unittest.TestCase):
         from tradingagents.dataflows import router
         from tradingagents.dataflows.vendors.yahoo import market, ohlcv
 
-        originals = (ohlcv.yf, ohlcv.yf_retry, market.yf, market.yf_retry, context.get_company_profile)
+        from tradingagents.memory import settlement
+
+        originals = (ohlcv.yf, ohlcv.yf_retry, market.yf, market.yf_retry, context.get_company_profile,
+                     settlement.get_closes)
         saved_methods = {m: dict(v) for m, v in router.VENDOR_METHODS.items()}
 
         def restore():
-            ohlcv.yf, ohlcv.yf_retry, market.yf, market.yf_retry, context.get_company_profile = originals
+            (ohlcv.yf, ohlcv.yf_retry, market.yf, market.yf_retry, context.get_company_profile,
+             settlement.get_closes) = originals
             for method, impls in saved_methods.items():
                 router.VENDOR_METHODS[method] = impls
 
@@ -136,6 +140,33 @@ class FmpAdapterTest(unittest.TestCase):
         self.assertIs(market.yf, self.fmp._FmpYfShim)
         self.assertIs(context.get_company_profile, self.fmp.get_company_profile)
         self.assertIs(router.VENDOR_METHODS["get_news"]["fmp"], self.fmp.get_news)
+        self.assertIs(settlement.get_closes, self.fmp.get_closes)
+
+    def test_get_closes_returns_empty_when_window_not_traded(self):
+        self.client.session.get.return_value = _response(payload=[])
+        self.assertTrue(self.fmp.get_closes("NVDA", "2026-10-20", "2026-11-03").empty)
+
+    def test_etf_fundamentals_and_statements(self):
+        payloads = {
+            "profile": [{"companyName": "VanEck Semiconductor ETF", "isEtf": True, "currency": "USD", "price": 540}],
+            "quote": [{"priceAvg50": 520}],
+            "etf/info": [{"name": "VanEck Semiconductor ETF", "expenseRatio": 0.35, "assetsUnderManagement": 6.5e10,
+                          "holdingsCount": 26, "etfCompany": "VanEck"}],
+            "etf/sector-weightings": [{"sector": "Technology", "weightPercentage": 100}],
+            "etf/country-weightings": [{"country": "United States", "weightPercentage": "79.46%"}],
+        }
+
+        def fake_get(url, params=None, timeout=None):
+            return _response(payload=payloads.get(url.rsplit("/stable/", 1)[1], []))
+
+        self.client.session.get.side_effect = fake_get
+        self.fmp._etf_flags.clear()
+        out = self.fmp.get_fundamentals("SMH", None)
+        self.assertIn("Fund Profile for SMH", out)
+        self.assertIn("Expense Ratio (%): 0.35", out)
+        self.assertIn("Technology 100%", out)
+        self.assertIn("United States 79.46%", out)
+        self.assertIn("not applicable", self.fmp.get_income_statement("SMH", "quarterly", None))
 
 
 class DataSourceSelectionTest(unittest.TestCase):

@@ -158,6 +158,14 @@ def _date_str(value: Any) -> Optional[str]:
     return pd.Timestamp(value).strftime("%Y-%m-%d")
 
 
+def get_closes(symbol: str, start_date: str, end_date: str) -> pd.Series:
+    """复盘用收盘价：与 Yahoo 版一致，窗口内还没有交易日时返回空序列（留待下次复盘）。"""
+    try:
+        return fetch_history(symbol, _date_str(start_date), _date_str(end_date))["Close"]
+    except _errors().NoMarketDataError:
+        return pd.Series(dtype=float)
+
+
 def _passthrough_retry(func, *_args, **_kwargs):
     """替换 yf_retry：让 FMP 抛出的 NoMarketData/VendorUnavailable 原样冒泡给路由层。"""
     return func()
@@ -184,6 +192,62 @@ def get_company_profile(ticker: str) -> dict:
     }
 
 
+_etf_flags: Dict[str, bool] = {}
+
+
+def _is_etf(canonical: str, profile: Optional[Dict[str, Any]] = None) -> bool:
+    if canonical not in _etf_flags:
+        if profile is None:
+            try:
+                profile = (_get_client().get("profile", symbol=canonical) or [{}])[0]
+            except _errors().VendorError:
+                return False
+        _etf_flags[canonical] = bool(profile.get("isEtf") or profile.get("isFund"))
+    return _etf_flags[canonical]
+
+
+def _etf_fundamentals(canonical: str, profile: Dict[str, Any], quote: Dict[str, Any]) -> str:
+    """ETF 没有公司财报：给出规模、费率、资产类别、行业/国家暴露。"""
+    client = _get_client()
+    errors = _errors()
+
+    def safe(path: str) -> List[Dict[str, Any]]:
+        try:
+            return client.get(path, symbol=canonical)
+        except errors.VendorError as exc:
+            logger.info("[TradingAgents/FMP] %s unavailable for %s: %s", path, canonical, exc)
+            return []
+
+    info = (safe("etf/info") or [{}])[0]
+    currency = profile.get("currency") or ""
+    fields = [
+        ("Name", info.get("name") or profile.get("companyName")),
+        ("Type", "ETF / fund (no corporate financial statements; analyse holdings, exposure, flows and NAV)"),
+        ("Issuer", info.get("etfCompany")),
+        ("Asset Class", info.get("assetClass")),
+        ("Assets Under Management", f"{info.get('assetsUnderManagement')} {currency}" if info.get("assetsUnderManagement") else None),
+        ("Expense Ratio (%)", info.get("expenseRatio")),
+        ("NAV", f"{info.get('nav')} {info.get('navCurrency') or currency}" if info.get("nav") else None),
+        ("Price", f"{profile.get('price')} {currency}" if profile.get("price") is not None else None),
+        ("Holdings Count", info.get("holdingsCount")),
+        ("Average Volume", info.get("avgVolume")),
+        ("Inception Date", info.get("inceptionDate")),
+        ("52 Week Range", profile.get("range")),
+        ("50 Day Average", quote.get("priceAvg50")),
+        ("200 Day Average", quote.get("priceAvg200")),
+    ]
+    lines = [f"{label}: {value}" for label, value in fields if value not in (None, "")]
+    sectors = safe("etf/sector-weightings")
+    if sectors:
+        lines.append("Sector exposure: " + ", ".join(f"{r.get('sector')} {r.get('weightPercentage')}%" for r in sectors[:8]))
+    countries = safe("etf/country-weightings")
+    if countries:
+        lines.append("Country exposure: " + ", ".join(f"{r.get('country')} {r.get('weightPercentage')}" for r in countries[:6]))
+    if info.get("description"):
+        lines.append(f"Objective: {str(info['description'])[:600]}")
+    return f"# Fund Profile for {canonical} (ETF, source: FMP)\n\n" + "\n".join(lines)
+
+
 def get_fundamentals(ticker: str, as_of_date: Optional[str] = None) -> str:
     from tradingagents.dataflows.date_window import withhold_live_profile
 
@@ -206,6 +270,8 @@ def get_fundamentals(ticker: str, as_of_date: Optional[str] = None) -> str:
             return {}
 
     quote = optional("quote")
+    if _is_etf(canonical, profile):
+        return _etf_fundamentals(canonical, profile, quote)
     ratios = optional("ratios-ttm")
     metrics = optional("key-metrics-ttm")
     currency = profile.get("currency")
@@ -247,6 +313,9 @@ def get_fundamentals(ticker: str, as_of_date: Optional[str] = None) -> str:
 def _statement(path: str, title: str, ticker: str, freq: str, as_of_date: Optional[str]) -> str:
     errors = _errors()
     canonical = _fmp_symbol(ticker)
+    if _is_etf(canonical):
+        return (f"# {title} for {canonical}: not applicable\n{canonical} is an ETF/fund, which files no corporate "
+                f"{title.lower()}. Analyse it through holdings, sector/country exposure, flows and NAV instead.")
     period = "annual" if (freq or "").lower() == "annual" else "quarter"
     rows = _get_client().get(path, symbol=canonical, period=period, limit=8)
     if as_of_date:
@@ -360,11 +429,13 @@ def install_fmp_vendor(api_key: Optional[str] = None) -> None:
         from tradingagents.dataflows import router
         from tradingagents.dataflows.vendors.yahoo import market as yahoo_market
         from tradingagents.dataflows.vendors.yahoo import ohlcv as yahoo_ohlcv
+        from tradingagents.memory import settlement
 
         for module in (yahoo_ohlcv, yahoo_market):
             module.yf = _FmpYfShim
             module.yf_retry = _passthrough_retry
         ta_context.get_company_profile = get_company_profile
+        settlement.get_closes = get_closes
 
         vendor_impls = {
             "get_fundamentals": get_fundamentals,
