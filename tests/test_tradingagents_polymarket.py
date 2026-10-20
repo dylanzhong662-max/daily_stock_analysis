@@ -87,7 +87,8 @@ class PolymarketReferenceTest(unittest.TestCase):
             _market("h2", "2 hikes", 180_000, prob="0.685", group="2"),
         ], neg_risk=True)
         results = {
-            "Fed rate hike": [hikes, _event("e-boc", "Bank of Canada Rate Hike in 2026?", [_market("b", "BoC", 9_000)])],
+            "Fed rate hike": [hikes, _event("e-boc", "Bank of Canada Rate Hike in 2026?", [_market("b", "BoC", 9_000)]),
+                              _event("e-uk", "UK rate hike in 2026?", [_market("u", "UK hike", 90_000)])],
             "Anthropic IPO": [buckets, shared],
             "OpenAI IPO": [shared, _event("e-oai", "OpenAI IPO closing market cap above $1T?", [_market("o1", "OpenAI >1T", 1_000_000)])],
             "AI bubble": RuntimeError("timeout"),
@@ -109,6 +110,7 @@ class PolymarketReferenceTest(unittest.TestCase):
         self.assertIn("  - $1.5–$1.75T: 17%", text)
         # 低成交量事件被过滤；跨主题事件去重
         self.assertNotIn("Bank of Canada", text)
+        self.assertNotIn("UK rate hike", text)  # 宏观主题过滤非美国事件
         self.assertNotIn("tiny", text)
         self.assertEqual(text.count("Will Anthropic or OpenAI IPO first?"), 1)
         self.assertIn('## "AI bubble"\nUnavailable right now (RuntimeError)', text)

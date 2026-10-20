@@ -45,6 +45,13 @@ MARKETS_PER_EVENT = 8
 MIN_EVENT_VOLUME = 20_000
 MIN_TICKER_EVENT_VOLUME = 500
 THIN_VOLUME = 5_000
+# 宏观主题只保留美国相关事件（搜索 "inflation" 会带出巴西/英国等）
+_MACRO_TOPICS = {"fed decision", "fed rate hike", "us recession", "inflation"}
+_NON_US_MACRO_RE = re.compile(
+    r"\b(brazil|uk|britain|england|japan|boj|canada|euro|ecb|eurozone|germany|france|australia|rba|india|"
+    r"turkey|argentina|mexico|china|korea|switzerland|snb)\b",
+    re.IGNORECASE,
+)
 _FUNDAMENTAL_RE = re.compile(r"revenue|margin|eps|earnings|guidance|data center", re.IGNORECASE)
 
 
@@ -107,7 +114,7 @@ def _format_event(event: Dict, markets: List[Dict], parse) -> Optional[str]:
         return (f"- **{markets[0].get('question') or title}** — {label} {p:.0%} "
                 f"(${volume:,.0f} volume, resolves {resolves}{_week(markets[0])}){thin}")
     exclusive = bool(event.get("negRisk"))
-    note = "mutually exclusive outcomes, probabilities sum to ~100%" if exclusive else "separate yes/no markets"
+    note = "mutually exclusive outcomes" if exclusive else "separate yes/no markets"
     lines = [f"- **{title}** (${volume:,.0f} volume, {note}){thin}"]
     if exclusive:
         # 分档事件保留原始档位顺序；档位过多时只留概率最高的几档
@@ -165,6 +172,8 @@ def build_reference(ticker: str, run_date: str, extra: List[str], use_defaults: 
             key = event.get("id") or event.get("slug") or event.get("title")
             markets = [m for m in event.get("markets", []) if polymarket._is_forward_looking(m, now)]
             if not markets or key in seen_events or _event_volume(event, markets) < min_volume:
+                continue
+            if topic.lower() in _MACRO_TOPICS and _NON_US_MACRO_RE.search(event.get("title") or ""):
                 continue
             candidates.append((key, event, markets))
         if kind == "ticker":
