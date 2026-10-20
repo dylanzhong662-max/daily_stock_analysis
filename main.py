@@ -457,6 +457,14 @@ def parse_arguments() -> argparse.Namespace:
         help='TradingAgents 分析日期（默认今天，不能晚于今天）'
     )
 
+    parser.add_argument(
+        '--tradingagents-polymarket',
+        type=str,
+        default=None,
+        metavar='TOPICS',
+        help='TradingAgents 的 Polymarket 参考主题，逗号分隔（最多 5 个），如 "Anthropic IPO,OpenAI IPO"'
+    )
+
     return parser.parse_args()
 
 
@@ -1269,6 +1277,7 @@ def run_tradingagents_mode(
     *,
     codes: List[str],
     trade_date: Optional[str] = None,
+    polymarket_topics: Optional[List[str]] = None,
     notify: bool = True,
 ) -> int:
     """Run TradingAgents deep research for each code; one failure does not stop the rest."""
@@ -1301,7 +1310,7 @@ def run_tradingagents_mode(
     failures = 0
     for code in codes:
         try:
-            result = service.analyze(code, trade_date=trade_date)
+            result = service.analyze(code, trade_date=trade_date, polymarket_topics=polymarket_topics)
         except TradingAgentsError as exc:
             failures += 1
             logger.error("TradingAgents 分析 %s 失败: %s", code, exc.message)
@@ -1569,6 +1578,9 @@ def main() -> int:
                 config,
                 codes=split_stock_list(args.tradingagents),
                 trade_date=getattr(args, 'tradingagents_date', None),
+                polymarket_topics=[
+                    t.strip() for t in (getattr(args, 'tradingagents_polymarket', None) or '').split(',') if t.strip()
+                ],
                 notify=not args.no_notify,
             )
 

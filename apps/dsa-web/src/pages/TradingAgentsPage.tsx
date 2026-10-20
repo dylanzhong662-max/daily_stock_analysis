@@ -71,6 +71,7 @@ const TradingAgentsPage: React.FC = () => {
   const [statusError, setStatusError] = useState<ParsedApiError | null>(null);
   const [stockCode, setStockCode] = useState('');
   const [tradeDate, setTradeDate] = useState('');
+  const [polymarketTopics, setPolymarketTopics] = useState('');
   const [analysts, setAnalysts] = useState<TradingAgentsAnalyst[]>(['market', 'news', 'fundamentals']);
 
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -225,6 +226,10 @@ const TradingAgentsPage: React.FC = () => {
         stockCode: stockCode.trim().toUpperCase(),
         tradeDate: tradeDate || undefined,
         analysts,
+        polymarketTopics: polymarketTopics
+          .split(/[,，\n]/)
+          .map((t) => t.trim())
+          .filter(Boolean),
       });
       attachTask(accepted.taskId, accepted.message);
     } catch (err) {
@@ -280,6 +285,14 @@ const TradingAgentsPage: React.FC = () => {
                   disabled={running}
                 />
               </div>
+              <Input
+                label="Polymarket 参考主题（可选）"
+                placeholder="如 Anthropic IPO, OpenAI IPO"
+                hint="逗号分隔，最多 5 个。会抓取这些主题的预测市场隐含概率，作为所有分析角色的参考（如用 Anthropic 上市市值判断 AI 算力链）"
+                value={polymarketTopics}
+                onChange={(e) => setPolymarketTopics(e.target.value)}
+                disabled={running}
+              />
               <div className="flex flex-wrap gap-x-6 gap-y-2">
                 {TRADINGAGENTS_ANALYSTS.map((analyst) => (
                   <Checkbox

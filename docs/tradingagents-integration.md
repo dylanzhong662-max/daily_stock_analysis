@@ -130,6 +130,14 @@ DSA 代码会自动转换成 Yahoo 格式：`600519` → `600519.SS`，`hk00700`
 - 需要 `TRADINGAGENTS_ENABLED=true`；Docker 部署时 `server` 服务内存上限已调到 2G。
 - 任务状态保存在内存里，服务重启会丢失进行中的任务；已生成的报告不受影响。
 
+### Polymarket 参考主题
+
+页面「Polymarket 参考主题」、API `polymarket_topics` 或 CLI `--tradingagents-polymarket "Anthropic IPO,OpenAI IPO"` 可指定最多 5 个主题。研究开始前会抓取这些主题下成交量最高的未结算预测市场（隐含概率、成交量、到期日、周变化），作为参考块注入到**所有角色**（分析师、多空研究员、交易员、风控、经理）共享的上下文，并保存为报告的 `0_reference/polymarket.md`。
+
+适合用一级市场/事件赔率辅助判断产业链股票，例如研究 NVDA、AVGO 等 AI 算力股时参考 “Anthropic IPO 当日市值区间”“OpenAI IPO 市值”等市场。需要 Polymarket 可达（国内服务器需配置 `TRADINGAGENTS_SOCIAL_PROXY`）；历史日期运行时 Polymarket 只有实时赔率，按 TradingAgents 规则不提供。
+
+此外，新闻分析师本身也会按需调用 Polymarket 工具查询宏观事件（如降息/加息概率）。
+
 ### CLI
 
 ```bash

@@ -67,6 +67,7 @@ export type StartTradingAgentsTaskPayload = {
   stockCode: string;
   tradeDate?: string;
   analysts?: TradingAgentsAnalyst[];
+  polymarketTopics?: string[];
 };
 
 const BASE = '/api/v1/tradingagents';
@@ -82,6 +83,7 @@ export const tradingAgentsApi = {
       stock_code: payload.stockCode,
       trade_date: payload.tradeDate || undefined,
       analysts: payload.analysts,
+      polymarket_topics: payload.polymarketTopics?.length ? payload.polymarketTopics : undefined,
     });
     return toCamelCase<TradingAgentsTaskAccepted>(response.data);
   },

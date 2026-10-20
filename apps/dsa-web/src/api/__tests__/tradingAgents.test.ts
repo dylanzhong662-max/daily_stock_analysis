@@ -30,7 +30,14 @@ describe('tradingAgentsApi', () => {
       stock_code: 'AAPL',
       trade_date: undefined,
       analysts: ['market', 'news'],
+      polymarket_topics: undefined,
     });
+
+    post.mockResolvedValueOnce({ data: { task_id: 't2' } });
+    await tradingAgentsApi.startTask({ stockCode: 'NVDA', polymarketTopics: ['Anthropic IPO'] });
+    expect(post).toHaveBeenLastCalledWith('/api/v1/tradingagents/tasks', expect.objectContaining({
+      polymarket_topics: ['Anthropic IPO'],
+    }));
     expect(accepted.taskId).toBe('t1');
   });
 

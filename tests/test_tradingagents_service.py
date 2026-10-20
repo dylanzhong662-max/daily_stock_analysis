@@ -456,3 +456,54 @@ class SingleRunGuardTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 captured["run"]()
         self.assertIsNone(ta_endpoint._running_task_id)
+
+
+class PolymarketReferenceTest(unittest.TestCase):
+    def test_normalize_topics_dedupes_and_limits(self):
+        self.assertEqual(svc._normalize_topics([" Anthropic  IPO ", "anthropic ipo", "", "OpenAI"]), ["Anthropic IPO", "OpenAI"])
+        with self.assertRaises(TradingAgentsError):
+            svc._normalize_topics([f"t{i}" for i in range(6)])
+
+    def test_inject_context_appends_to_every_run_state(self):
+        graph = SimpleNamespace(create_run_state=lambda *a, **k: {"instrument_context": "ticker NVDA"})
+        svc._inject_context(graph, "## Polymarket ref")
+        self.assertEqual(graph.create_run_state("NVDA", "2026-10-20")["instrument_context"], "ticker NVDA\n\n## Polymarket ref")
+
+    def test_analyze_injects_reference_and_saves_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report_md = Path(tmp) / "NVDA_20261020_152056" / "complete_report.md"
+            report_md.parent.mkdir()
+            report_md.write_text("# r", encoding="utf-8")
+            created = {}
+
+            class FakeGraph:
+                def __init__(self, selected_analysts, config):
+                    created["graph"] = self
+
+                def create_run_state(self, *args, **kwargs):
+                    return {"instrument_context": "NVDA"}
+
+                def propagate(self, ticker, date):
+                    created["state"] = self.create_run_state(ticker, date)
+                    return {"final_trade_decision": "ok"}, "Buy"
+
+                def save_reports(self, state, ticker):
+                    return report_md
+
+            modules = _fake_tradingagents_modules(FakeGraph)
+            poly = types.ModuleType("tradingagents.dataflows.vendors.polymarket")
+            poly.get_prediction_markets = lambda topic, limit=None, as_of_date=None: f"## markets for {topic}"
+            modules.update({
+                "tradingagents.dataflows": types.ModuleType("tradingagents.dataflows"),
+                "tradingagents.dataflows.vendors": types.ModuleType("tradingagents.dataflows.vendors"),
+                "tradingagents.dataflows.vendors.polymarket": poly,
+            })
+            with _clean_env(), patch.dict(sys.modules, modules), \
+                    patch("src.services.tradingagents_proxy.install_social_proxy", return_value=None):
+                result = TradingAgentsService(_config(litellm_model="deepseek/deepseek-chat")).analyze(
+                    "NVDA", trade_date="2026-10-20", polymarket_topics=["Anthropic IPO"]
+                )
+            self.assertIn("## markets for Anthropic IPO", created["state"]["instrument_context"])
+            self.assertEqual(result["polymarket_topics"], ["Anthropic IPO"])
+            saved = report_md.parent / "0_reference" / "polymarket.md"
+            self.assertIn("Anthropic IPO", saved.read_text(encoding="utf-8"))

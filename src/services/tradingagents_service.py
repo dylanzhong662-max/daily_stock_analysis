@@ -86,6 +86,7 @@ _STATE_REPORT_KEYS = (
 
 # 报告目录结构（tradingagents/reporting.py::write_report_tree）
 REPORT_SECTIONS = (
+    ("polymarket", "Polymarket 预测市场参考", "0_reference/polymarket.md"),
     ("market", "技术面分析师", "1_analysts/market.md"),
     ("sentiment", "情绪分析师", "1_analysts/sentiment.md"),
     ("news", "新闻分析师", "1_analysts/news.md"),
@@ -322,6 +323,49 @@ def _resolve_trade_date(trade_date: Optional[str]) -> str:
     return parsed.isoformat()
 
 
+MAX_POLYMARKET_TOPICS = 5
+
+
+def _normalize_topics(topics: Optional[List[str]]) -> List[str]:
+    cleaned: List[str] = []
+    for topic in topics or []:
+        text = " ".join(str(topic or "").split())[:80]
+        if text and text.lower() not in {t.lower() for t in cleaned}:
+            cleaned.append(text)
+    if len(cleaned) > MAX_POLYMARKET_TOPICS:
+        raise TradingAgentsError(
+            "tradingagents_invalid_polymarket_topics",
+            f"Polymarket 参考主题最多 {MAX_POLYMARKET_TOPICS} 个",
+        )
+    return cleaned
+
+
+def build_polymarket_reference(topics: List[str], run_date: str, limit: int = 6) -> str:
+    """抓取用户指定主题的 Polymarket 预测市场，拼成注入给所有角色的参考块。"""
+    from tradingagents.dataflows.vendors.polymarket import get_prediction_markets
+
+    blocks = [get_prediction_markets(topic, limit=limit, as_of_date=run_date) for topic in topics]
+    return (
+        "# User-specified prediction-market reference (Polymarket)\n"
+        "The user asked every role to consider the following live prediction markets as a "
+        "reference signal for this instrument (e.g. private-company valuations or IPO odds "
+        "that drive the sector). Treat the probabilities as crowd-priced odds, not facts; "
+        "explain how, if at all, they bear on the instrument.\n\n" + "\n\n".join(blocks)
+    )
+
+
+def _inject_context(graph: Any, extra: str) -> None:
+    """把参考块追加到每个角色都会读取的 instrument_context。"""
+    original = graph.create_run_state
+
+    def create_run_state(*args, **kwargs):
+        state = original(*args, **kwargs)
+        state["instrument_context"] = f"{state.get('instrument_context') or ''}\n\n{extra}".strip()
+        return state
+
+    graph.create_run_state = create_run_state
+
+
 class TradingAgentsService:
     """调用 TradingAgents 完成单只股票的多智能体研究。"""
 
@@ -356,8 +400,10 @@ class TradingAgentsService:
         *,
         trade_date: Optional[str] = None,
         analysts: Optional[List[str]] = None,
+        polymarket_topics: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         self.ensure_ready()
+        topics = _normalize_topics(polymarket_topics)
         graph_cls, build_default_config = _import_tradingagents()
 
         ticker = to_yfinance_ticker(code)
@@ -380,8 +426,15 @@ class TradingAgentsService:
             ta_config.get("deep_think_llm"), ta_config.get("quick_think_llm"), ",".join(selected), data_source,
         )
         graph = graph_cls(selected_analysts=tuple(selected), config=ta_config)
+        reference = build_polymarket_reference(topics, run_date) if topics else ""
+        if reference:
+            _inject_context(graph, reference)
         state, rating = graph.propagate(ticker, run_date)
         report_md_path = Path(graph.save_reports(state, ticker))
+        if reference:
+            ref_dir = report_md_path.parent / "0_reference"
+            ref_dir.mkdir(parents=True, exist_ok=True)
+            (ref_dir / "polymarket.md").write_text(reference, encoding="utf-8")
         report_html_path = report_md_path.with_suffix(".html")
         del graph
         gc.collect()
@@ -392,6 +445,7 @@ class TradingAgentsService:
             "ticker": ticker,
             "trade_date": run_date,
             "analysts": selected,
+            "polymarket_topics": topics,
             "rating": rating,
             "operation_advice": rating_to_operation_advice(rating, report_language),
             "llm_provider": ta_config.get("llm_provider"),
