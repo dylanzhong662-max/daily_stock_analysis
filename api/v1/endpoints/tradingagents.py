@@ -23,6 +23,7 @@ from src.services.task_queue import get_task_queue
 from src.services.tradingagents_service import (
     TradingAgentsError,
     TradingAgentsService,
+    apply_deep_model,
     list_reports,
     read_report,
     report_html_path,
@@ -56,6 +57,10 @@ class TradingAgentsTaskRequest(BaseModel):
         None, description="额外的 Polymarket 参考主题（最多 5 个），如 ['Anthropic IPO']，与默认主题合并"
     )
     use_default_polymarket: bool = Field(True, description="是否自动加入默认 Polymarket 参考主题与本股市场")
+    deep_model: Optional[str] = Field(
+        None, max_length=128,
+        description="研究经理/组合经理用的模型，取自 /status 的 deep_model_options[].id；默认用服务端配置",
+    )
 
 
 class TradingAgentsTaskAccepted(BaseModel):
@@ -97,6 +102,8 @@ def tradingagents_start_task(
     service = TradingAgentsService(config)
     try:
         service.ensure_ready()
+        # 提交前先校验模型选择，不要等后台任务跑起来才失败
+        apply_deep_model({}, request.deep_model)
     except TradingAgentsError as exc:
         raise _to_http_error(exc) from exc
 
@@ -107,13 +114,14 @@ def tradingagents_start_task(
     def run_research() -> Dict[str, Any]:
         global _running_task_id
         try:
-            task_queue.update_task_progress(task_id, 10, "TradingAgents 多智能体研究进行中，通常需要 3-5 分钟")
+            task_queue.update_task_progress(task_id, 10, "TradingAgents 多智能体研究进行中，通常需要 5-10 分钟")
             return service.analyze(
                 request.stock_code,
                 trade_date=request.trade_date,
                 analysts=request.analysts,
                 polymarket_topics=request.polymarket_topics,
                 use_default_polymarket=request.use_default_polymarket,
+                deep_model=request.deep_model,
             )
         finally:
             with _run_lock:

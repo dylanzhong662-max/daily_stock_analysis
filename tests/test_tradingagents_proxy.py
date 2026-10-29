@@ -148,6 +148,11 @@ class TierProxyTest(unittest.TestCase):
         self.assertIn("http_client", seen["deep"])
         self.assertIn("http_async_client", seen["deep"])
         self.assertEqual(seen["quick"], {"callbacks": []})
+        # 页面把 deep 档换成直连模型：配置里显式 deep_think_proxy=None 优先于环境变量
+        seen.clear()
+        with patch.dict(os.environ, {px.TIER_PROXY_ENVS["deep"]: "http://proxy:8118"}):
+            trading_graph.create_tier_client({"deep_think_proxy": None}, "deep")
+        self.assertEqual(seen["deep"], {})
 
 
     @unittest.skipUnless(_HAS_TA, "tradingagents not installed")

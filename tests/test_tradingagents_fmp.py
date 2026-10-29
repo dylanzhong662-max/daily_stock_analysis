@@ -84,6 +84,47 @@ class FmpAdapterTest(unittest.TestCase):
         self.assertIn("2026-03-28", out)
         self.assertNotIn("2026-06-27", out)
 
+    def test_latest_quarter_appended_after_sec_table(self):
+        # GOOGL 2026-10-29：SEC 只到 6 月 10-Q，Q3 已随 10-28 业绩 8-K 发布、FMP 已收录
+        self.client.session.get.return_value = _response(payload=[
+            {"date": "2026-09-30", "filingDate": "2026-10-28", "operatingCashFlow": 42290e6,
+             "capitalExpenditure": -51355e6, "freeCashFlow": -9065e6},
+            {"date": "2026-06-30", "filingDate": "2026-07-23", "operatingCashFlow": 39069e6},
+        ])
+        sec_table = ("# Cash Flow Statement for GOOGL (quarterly), USD in millions unless the row says otherwise\n\n"
+                     ",2026-03-31,2026-06-30 (6 months)\nOperating Cash Flow,45790,84859\n")
+        wrapped = self.fmp._with_latest_quarter(lambda t, f, d: sec_table, "cash-flow-statement")
+        out = wrapped("GOOGL", "quarterly", "2026-10-29")
+        self.assertTrue(out.startswith(sec_table))
+        self.assertIn("## Latest quarter not yet in SEC XBRL", out)
+        self.assertIn(",2026-09-30 (quarter, released 2026-10-28)\n", out)
+        self.assertIn("Capital Expenditure,51355\n", out)  # 与 SEC 表同为正数流出
+        self.assertIn("Free Cash Flow,-9065\n", out)
+        self.assertNotIn("2026-06-30 (quarter", out)  # SEC 已有的季度不重复
+        # 分析日在业绩发布前：不泄露未来数据
+        self.assertEqual(wrapped("GOOGL", "quarterly", "2026-10-27"), sec_table)
+        self.assertEqual(wrapped("GOOGL", "annual", "2026-10-29"), sec_table)
+
+    def test_latest_quarter_failure_keeps_sec_table(self):
+        self.client.session.get.return_value = _response(status=500, payload={})
+        wrapped = self.fmp._with_latest_quarter(lambda t, f, d: ",2026-06-30\nRevenue,1\n", "income-statement")
+        self.assertEqual(wrapped("GOOGL", "quarterly", "2026-10-29"), ",2026-06-30\nRevenue,1\n")
+
+    def test_extended_hours_note_only_on_large_gap(self):
+        quote = _response(payload=[{"symbol": "GOOGL", "price": 324.89}])
+        trade = _response(payload=[{"symbol": "GOOGL", "price": 291.75, "timestamp": 1793265770000}])
+        self.client.session.get.side_effect = [quote, trade]
+        note = self.fmp.extended_hours_note("googl")
+        self.assertIn("Last regular-session close: 324.89", note)
+        self.assertIn("291.75", note)
+        self.assertIn("-10.2% vs that close", note)
+        self.assertIn("Re-evaluate technical levels", note)
+        small = _response(payload=[{"symbol": "GOOGL", "price": 326.0, "timestamp": 1793265770000}])
+        self.client.session.get.side_effect = [quote, small]
+        self.assertEqual(self.fmp.extended_hours_note("GOOGL"), "")
+        self.client.session.get.side_effect = [quote, _response(payload=[])]
+        self.assertEqual(self.fmp.extended_hours_note("GOOGL"), "")
+
     def test_news_window_and_insider_point_in_time(self):
         self.client.session.get.return_value = _response(payload=[
             {"publishedDate": "2026-10-15 21:12:13", "title": "in", "publisher": "CNBC", "text": "t", "url": "u"},

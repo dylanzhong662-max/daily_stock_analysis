@@ -259,6 +259,8 @@ def statement_guide(text: str) -> str:
 
 
 STATEMENT_MAX_COLUMNS = 12
+# 报表后追加的独立小节以此开头（见 tradingagents_fmp.latest_quarter_appendix）
+STATEMENT_SECTION_MARK = "\n## Latest quarter not yet in SEC XBRL"
 
 
 def trim_statement_columns(text: str, keep: int = STATEMENT_MAX_COLUMNS) -> str:
@@ -290,13 +292,16 @@ def _wrap_statement(original: Callable, guide: bool = True) -> Callable:
         text = original(*args, **kwargs)
         if not isinstance(text, str):
             return text
+        # 已附上的独立小节（如 FMP 补的最新季度）不属于主表，解析前先拆开、最后原样接回
+        text, sep, extra = text.partition(STATEMENT_SECTION_MARK)
+        extra = sep + extra
         try:
             # 同比要用到更早的基数列，先在完整表上算附录，再裁剪
             appendix = statement_guide(text) if guide else ""
-            return trim_statement_columns(text) + appendix
+            return trim_statement_columns(text) + appendix + extra
         except Exception as exc:  # 附录只是辅助，解析失败就返回原表
             logger.info("[TradingAgents/quality] statement guide skipped: %s", exc)
-            return text
+            return text + extra
 
     return _mark(wrapper)
 

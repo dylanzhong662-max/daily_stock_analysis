@@ -325,6 +325,57 @@ def _resolve_trade_date(trade_date: Optional[str]) -> str:
     return parsed.isoformat()
 
 
+# 页面可选的 deep 档模型（研究经理/组合经理）。服务端白名单，浏览器只能从中选，不能传任意地址或 key。
+# 格式：逗号分隔的 provider:model[@proxy]，proxy 为 "proxy" 时沿用 TRADINGAGENTS_DEEP_THINK_PROXY；
+# 第一项之外的 openai_compatible 选项沿用 TRADINGAGENTS_DEEP_THINK_BACKEND_URL / OPENAI_COMPATIBLE_API_KEY。
+# 例：openai_compatible:gpt-6.1-sol@proxy,deepseek:deepseek-v4-pro,deepseek:deepseek-flash
+DEEP_MODEL_OPTIONS_ENV = "TRADINGAGENTS_DEEP_MODEL_OPTIONS"
+_PROVIDER_LABELS = {"openai_compatible": "aihubmix", "deepseek": "DeepSeek", "openai": "OpenAI",
+                    "anthropic": "Anthropic", "google": "Google"}
+
+
+def deep_model_options() -> List[Dict[str, Any]]:
+    """解析 ``TRADINGAGENTS_DEEP_MODEL_OPTIONS``；未配置时返回空列表（页面不显示选择框）。"""
+    options = []
+    for raw in (os.environ.get(DEEP_MODEL_OPTIONS_ENV) or "").split(","):
+        item = raw.strip()
+        if not item or ":" not in item:
+            continue
+        spec, _, proxy = item.partition("@")
+        provider, _, model = spec.partition(":")
+        provider, model = provider.strip().lower(), model.strip()
+        if not provider or not model:
+            continue
+        options.append({
+            "id": f"{provider}:{model}",
+            "provider": provider,
+            "model": model,
+            "proxied": proxy.strip().lower() == "proxy",
+            "label": f"{model}（{_PROVIDER_LABELS.get(provider, provider)}）",
+        })
+    return options
+
+
+def apply_deep_model(ta_config: Dict[str, Any], deep_model: Optional[str]) -> Dict[str, Any]:
+    """按页面选择覆盖 deep 档 provider/model/代理；未选择时保持环境变量配置。"""
+    if not deep_model:
+        return ta_config
+    option = next((o for o in deep_model_options() if o["id"] == deep_model), None)
+    if option is None:
+        raise TradingAgentsError(
+            "tradingagents_invalid_model",
+            f"不支持的模型: {deep_model}，可选: {', '.join(o['id'] for o in deep_model_options()) or '(未配置)'}",
+        )
+    ta_config["deep_think_provider"] = option["provider"]
+    ta_config["deep_think_llm"] = option["model"]
+    if option["provider"] != "openai_compatible":
+        # 回到原生 provider（如 DeepSeek）时不要沿用网关地址
+        ta_config["deep_think_backend_url"] = None
+    ta_config["deep_think_proxy"] = (os.environ.get("TRADINGAGENTS_DEEP_THINK_PROXY") or "").strip() or None \
+        if option["proxied"] else None
+    return ta_config
+
+
 MAX_POLYMARKET_TOPICS = 5
 
 
@@ -361,6 +412,31 @@ def _inject_context(graph: Any, extra: str) -> None:
     graph.create_run_state = create_run_state
 
 
+def _inject_shared_context(graph: Any, extra: str) -> None:
+    """把说明块原样追加到 instrument_context，所有角色都能读到（如盘后跳空提示）。"""
+    original = graph.create_run_state
+
+    def create_run_state(*args, **kwargs):
+        state = original(*args, **kwargs)
+        state["instrument_context"] = f"{state.get('instrument_context') or ''}\n\n{extra}".strip()
+        return state
+
+    graph.create_run_state = create_run_state
+
+
+def _extended_hours_note(ticker: str, run_date: str, data_source: str) -> str:
+    """当天研究且用 FMP 时，取盘前/盘后跳空提示；历史日期或取不到时返回空串。"""
+    if data_source != "fmp" or run_date != date.today().isoformat():
+        return ""
+    from src.services.tradingagents_fmp import extended_hours_note
+
+    try:
+        return extended_hours_note(ticker)
+    except Exception as exc:  # 只是补充提示，失败不影响研究
+        logger.info("[TradingAgents] extended-hours quote unavailable for %s: %s", ticker, exc)
+        return ""
+
+
 class TradingAgentsService:
     """调用 TradingAgents 完成单只股票的多智能体研究。"""
 
@@ -380,7 +456,20 @@ class TradingAgentsService:
             "analysts": list(getattr(self.config, "tradingagents_analysts", SUPPORTED_ANALYSTS)),
             "polymarket_default_topics": default_topics(),
             "polymarket_ticker_topic": ticker_topic_enabled(),
+            "deep_model_options": [{"id": o["id"], "label": o["label"]} for o in deep_model_options()],
+            "deep_model_default": self._default_deep_model(),
         }
+
+    @staticmethod
+    def _default_deep_model() -> Optional[str]:
+        """环境变量当前配置的 deep 档对应的选项 id（不在白名单里时为 None）。"""
+        model = (os.environ.get("TRADINGAGENTS_DEEP_THINK_LLM") or "").strip()
+        provider = (os.environ.get("TRADINGAGENTS_DEEP_THINK_PROVIDER") or os.environ.get("TRADINGAGENTS_LLM_PROVIDER")
+                    or "").strip().lower()
+        for option in deep_model_options():
+            if option["model"] == model and (not provider or option["provider"] == provider):
+                return option["id"]
+        return None
 
     def ensure_ready(self) -> None:
         if not getattr(self.config, "tradingagents_enabled", False):
@@ -399,6 +488,7 @@ class TradingAgentsService:
         analysts: Optional[List[str]] = None,
         polymarket_topics: Optional[List[str]] = None,
         use_default_polymarket: bool = True,
+        deep_model: Optional[str] = None,
     ) -> Dict[str, Any]:
         self.ensure_ready()
         topics = _normalize_topics(polymarket_topics)
@@ -407,7 +497,7 @@ class TradingAgentsService:
         ticker = to_yfinance_ticker(code)
         selected = _resolve_analysts(analysts, list(getattr(self.config, "tradingagents_analysts", [])))
         run_date = _resolve_trade_date(trade_date)
-        ta_config = build_tradingagents_config(self.config, build_default_config)
+        ta_config = apply_deep_model(build_tradingagents_config(self.config, build_default_config), deep_model)
         data_source = resolve_data_source(self.config)
         if data_source == "fmp":
             from src.services.tradingagents_fmp import apply_fmp_config, install_fmp_vendor, resolve_fmp_api_key
@@ -463,6 +553,10 @@ class TradingAgentsService:
             reference, used_topics = "", []
         if reference:
             _inject_context(graph, reference)
+        extended = _extended_hours_note(ticker, run_date, data_source)
+        if extended:
+            logger.info("[TradingAgents] extended-hours move for %s injected", ticker)
+            _inject_shared_context(graph, extended)
         from src.services.tradingagents_langfuse import research_trace, trace_url
 
         trace_meta = {
@@ -490,10 +584,11 @@ class TradingAgentsService:
                 ref_dir.mkdir(parents=True, exist_ok=True)
                 (ref_dir / "langfuse.json").write_text(
                     json.dumps({"trace_id": trace.trace_id, "trace_url": url}), encoding="utf-8")
-        if reference:
-            ref_dir = report_md_path.parent / "0_reference"
-            ref_dir.mkdir(parents=True, exist_ok=True)
-            (ref_dir / "polymarket.md").write_text(reference, encoding="utf-8")
+        for name, block in (("polymarket.md", reference), ("extended_hours.md", extended)):
+            if block:
+                ref_dir = report_md_path.parent / "0_reference"
+                ref_dir.mkdir(parents=True, exist_ok=True)
+                (ref_dir / name).write_text(block, encoding="utf-8")
         report_html_path = report_md_path.with_suffix(".html")
         del graph
         gc.collect()

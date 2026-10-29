@@ -70,6 +70,7 @@ pip install -r requirements-tradingagents.txt   # 固定在 v0.6.0 tag
    - deep 用于研究经理和组合经理，适合推理更强的模型。
    - quick 用于分析师、辩论、交易员和记忆复盘。
    - deep 档可以单独换 provider：`TRADINGAGENTS_DEEP_THINK_PROVIDER` / `_LLM` / `_BACKEND_URL`（TradingAgents 原生变量）；境外网关在机房直连不通时，用 `TRADINGAGENTS_DEEP_THINK_PROXY`（或 `_QUICK_THINK_PROXY`）只让该档模型走代理。
+   - 网页上可以按次选择 deep 档模型：`TRADINGAGENTS_DEEP_MODEL_OPTIONS` 列出白名单（`provider:model[@proxy]`），页面只能从中选；未配置时不显示选择框、沿用上面的环境变量。
    - DeepSeek 的 `deepseek-chat` / `deepseek-reasoner` 已是废弃别名，都指向 V4.1 Flash；要让两档真正分开，用 `TRADINGAGENTS_DEEP_THINK_LLM=deepseek-v4-pro`、`TRADINGAGENTS_QUICK_THINK_LLM=deepseek-flash`。
 4. TradingAgents 只从环境变量读取 API Key。如果对应变量没有设置，DSA 会在运行时把推导出的 Key 写入当前进程的环境变量；已有的值不会被覆盖。
 5. `TRADINGAGENTS_OUTPUT_LANGUAGE` 未设置时，按 `REPORT_LANGUAGE` 选择 Chinese、English 或 Korean。
@@ -93,7 +94,8 @@ pip install -r requirements-tradingagents.txt   # 固定在 v0.6.0 tag
 | 日线 OHLCV、技术指标、已核验行情快照、历史决策复盘收盘价 | FMP `historical-price-eod/dividend-adjusted` |
 | 公司身份（名称、行业、交易所） | FMP `profile` |
 | 基本面概览 | FMP `profile` + `quote` + `ratios-ttm` + `key-metrics-ttm`（仅当天运行提供，历史日期按 TradingAgents 规则不提供） |
-| 三大报表 | 先 SEC EDGAR（按申报值），再 FMP（按 `filingDate` 过滤到分析日） |
+| 三大报表 | 先 SEC EDGAR（按申报值），再 FMP（按 `filingDate` 过滤到分析日）。业绩 8-K 已发布、10-Q 还没进 SEC XBRL 时，SEC 表后附一节“Latest quarter not yet in SEC XBRL”，列出 FMP 已收录的最新季度并注明来自业绩发布 |
+| 盘前/盘后价格 | 当天的研究会查 FMP 盘前/盘后最新成交，与上一收盘相差 3% 以上（如财报后跳空）时，给所有角色注入提示：日线和指标都止于收盘，技术位与目标价要按最新价重估；内容另存 `0_reference/extended_hours.md`。历史日期不注入 |
 | 个股新闻、全球新闻 | FMP `news/stock`、`news/general-latest` |
 | 内部人交易 | FMP `insider-trading/search`（按 `filingDate` 过滤） |
 

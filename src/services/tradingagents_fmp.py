@@ -361,6 +361,126 @@ def _statement(path: str, title: str, ticker: str, freq: str, as_of_date: Option
     return f"# {title} data for {canonical} ({freq}, source: FMP, as filed by {as_of_date or 'today'})\n" + buf.getvalue()
 
 
+# SEC companyfacts 只收 10-Q/10-K 的 XBRL；业绩 8-K 发布后到 10-Q 申报之间（通常数天到两周），
+# 最新季度只在 FMP 里有。这几行足够支撑估值/现金流判断，避免模型只能引用新闻转述的数字。
+_LATEST_QUARTER_ROWS = {
+    "income-statement": (
+        ("Revenue", "revenue"), ("Cost of Revenue", "costOfRevenue"), ("Gross Profit", "grossProfit"),
+        ("Operating Income", "operatingIncome"), ("Income Before Tax", "incomeBeforeTax"),
+        ("Net Income", "netIncome"), ("EPS Diluted", "epsDiluted"),
+    ),
+    "cash-flow-statement": (
+        ("Operating Cash Flow", "operatingCashFlow"), ("Capital Expenditure", "capitalExpenditure"),
+        ("Free Cash Flow", "freeCashFlow"), ("Investing Cash Flow", "netCashProvidedByInvestingActivities"),
+        ("Financing Cash Flow", "netCashProvidedByFinancingActivities"),
+    ),
+    "balance-sheet-statement": (
+        ("Total Assets", "totalAssets"), ("Current Assets", "totalCurrentAssets"),
+        ("Cash and Equivalents", "cashAndCashEquivalents"), ("Total Liabilities", "totalLiabilities"),
+        ("Current Liabilities", "totalCurrentLiabilities"), ("Stockholders Equity", "totalStockholdersEquity"),
+        ("Total Debt", "totalDebt"),
+    ),
+}
+# SEC 表把资本开支记为正数（流出金额），FMP 记为负数；统一成 SEC 的写法，避免模型把两列当作反向
+_POSITIVE_OUTFLOW_KEYS = {"capitalExpenditure"}
+_SEC_COLUMN_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+
+def _sec_latest_column(text: str) -> Optional[str]:
+    """SEC 季度表表头里最新的期末日期。"""
+    for line in text.splitlines():
+        if line.startswith(","):
+            dates = _SEC_COLUMN_DATE_RE.findall(line)
+            return max(dates) if dates else None
+    return None
+
+
+def _millions(value: Any, per_share: bool, positive: bool = False) -> str:
+    if value in (None, ""):
+        return "n/a"
+    number = abs(float(value)) if positive else float(value)
+    if per_share:
+        return f"{number:g}"
+    return f"{number / 1e6:.0f}"
+
+
+def latest_quarter_appendix(path: str, ticker: str, sec_latest: Optional[str], as_of_date: Optional[str]) -> str:
+    """FMP 里比 SEC 表更新、且在分析日前已发布的季度，作为单独一节附在 SEC 表后；没有则返回空串。"""
+    rows = _get_client().get(path, symbol=_fmp_symbol(ticker), period="quarter", limit=4)
+    fresh = [
+        r for r in rows
+        if str(r.get("date") or "") > (sec_latest or "")
+        and (not as_of_date or str(r.get("filingDate") or r.get("acceptedDate") or "")[:10] <= as_of_date)
+    ]
+    if not fresh:
+        return ""
+    fresh.sort(key=lambda r: str(r.get("date")))
+    lines = [
+        "",
+        "## Latest quarter not yet in SEC XBRL (source: FMP, from the earnings release)",
+        "These figures were published after the most recent 10-Q/10-K shown above (typically in the earnings "
+        "8-K). They are the company's reported numbers but not yet confirmed by the 10-Q; prefer them over "
+        "news paraphrases, and say they come from the earnings release when you cite them.",
+        "USD in millions unless the row says otherwise." + (
+            " Columns here cover that single quarter (3 months), not year to date; Capital Expenditure is "
+            "shown as a positive outflow, as above." if path == "cash-flow-statement" else ""),
+        "",
+        "," + ",".join(f"{r.get('date')} (quarter, released {str(r.get('filingDate') or '')[:10]})" for r in fresh),
+    ]
+    for label, key in _LATEST_QUARTER_ROWS[path]:
+        per_share = key.startswith("eps")
+        cells = [_millions(r.get(key), per_share, key in _POSITIVE_OUTFLOW_KEYS) for r in fresh]
+        lines.append(f"{label}," + ",".join(cells))
+    return "\n".join(lines) + "\n"
+
+
+def _with_latest_quarter(sec_impl: Any, path: str) -> Any:
+    """包装 SEC vendor：季度表后补上 FMP 里更新的季度（失败时只返回 SEC 原表）。"""
+    def wrapper(ticker: str, freq: str = "quarterly", as_of_date: Optional[str] = None, *args, **kwargs):
+        text = sec_impl(ticker, freq, as_of_date, *args, **kwargs)
+        if not isinstance(text, str) or (freq or "").lower() == "annual":
+            return text
+        try:
+            return text + latest_quarter_appendix(path, ticker, _sec_latest_column(text), as_of_date)
+        except Exception as exc:  # 补充数据失败不影响 SEC 原表
+            logger.info("[TradingAgents/fmp] latest-quarter appendix skipped for %s: %s", ticker, exc)
+            return text
+
+    wrapper._dsa_latest_quarter = True  # type: ignore[attr-defined]
+    return wrapper
+
+
+# 盘前/盘后成交价与最近收盘相差超过此比例时，提醒所有角色按最新价重新评估
+EXTENDED_GAP_THRESHOLD = 0.03
+
+
+def extended_hours_note(ticker: str) -> str:
+    """最近收盘之后的盘前/盘后成交（如财报后跳空）；差距不大或取不到时返回空串。
+
+    行情通道只有日线收盘，财报在盘后发布时，研究会全程按已经失效的收盘价定技术位和目标价。
+    只用于当天的研究，历史日期的研究不调用（避免把未来价格带进回测）。
+    """
+    canonical = _fmp_symbol(ticker)
+    quote = (_get_client().get("quote", symbol=canonical) or [{}])[0]
+    trade = (_get_client().get("aftermarket-trade", symbol=canonical) or [{}])[0]
+    close, price, stamp = quote.get("price"), trade.get("price"), trade.get("timestamp")
+    if not close or not price or not stamp:
+        return ""
+    gap = float(price) / float(close) - 1
+    if abs(gap) < EXTENDED_GAP_THRESHOLD:
+        return ""
+    when = datetime.utcfromtimestamp(int(stamp) / 1000).strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        "# Extended-hours price (source: FMP, after the last regular close)\n"
+        f"- Last regular-session close: {float(close):.2f}\n"
+        f"- Latest pre-/after-hours trade: {float(price):.2f} at {when} ({gap:+.1%} vs that close)\n"
+        "- The daily price history and every indicator (moving averages, RSI, MACD, Bollinger, support and "
+        "resistance) end at that close and do not include this move. Re-evaluate technical levels, entry, "
+        "stop and target prices from the latest trade, not from the close; say which price you anchor to. "
+        "Extended-hours prices are thinly traded and can still move before the open."
+    )
+
+
 def get_balance_sheet(ticker: str, freq: str = "quarterly", as_of_date: Optional[str] = None) -> str:
     return _statement("balance-sheet-statement", "Balance Sheet", ticker, freq, as_of_date)
 
@@ -522,6 +642,11 @@ def install_fmp_vendor(api_key: Optional[str] = None) -> None:
         }
         for method, impl in vendor_impls.items():
             router.VENDOR_METHODS[method]["fmp"] = impl
+        for method, path in (("get_income_statement", "income-statement"), ("get_cashflow", "cash-flow-statement"),
+                             ("get_balance_sheet", "balance-sheet-statement")):
+            sec_impl = router.VENDOR_METHODS.get(method, {}).get("sec_edgar")
+            if callable(sec_impl) and not getattr(sec_impl, "_dsa_latest_quarter", False):
+                router.VENDOR_METHODS[method]["sec_edgar"] = _with_latest_quarter(sec_impl, path)
         _installed = True
         logger.info("[TradingAgents] FMP data vendor installed (prices/fundamentals/news via FMP)")
 

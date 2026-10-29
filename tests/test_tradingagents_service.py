@@ -26,7 +26,9 @@ from src.services import tradingagents_service as svc
 from src.services.tradingagents_service import (
     TradingAgentsError,
     TradingAgentsService,
+    apply_deep_model,
     build_tradingagents_config,
+    deep_model_options,
     rating_to_operation_advice,
     resolve_llm_route,
     to_yfinance_ticker,
@@ -50,6 +52,8 @@ _TA_ENV_KEYS = [
     "TRADINGAGENTS_DATA_SOURCE",
     "TRADINGAGENTS_DEEP_THINK_PROXY",
     "TRADINGAGENTS_QUICK_THINK_PROXY",
+    "TRADINGAGENTS_DEEP_THINK_PROVIDER",
+    "TRADINGAGENTS_DEEP_MODEL_OPTIONS",
 ]
 
 
@@ -329,12 +333,58 @@ class EndpointTest(unittest.TestCase):
         self.assertEqual(kwargs["report_type"], "tradingagents")
         self.assertEqual(kwargs["stock_code"], "AAPL")
 
+    def test_start_task_rejects_unknown_model(self):
+        with _clean_env(), patch.object(ta_endpoint.TradingAgentsService, "ensure_ready", return_value=None):
+            response = self._client(_config()).post(
+                "/api/v1/tradingagents/tasks", json={"stock_code": "AAPL", "deep_model": "openai:gpt-4o"}
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"]["error"], "tradingagents_invalid_model")
+
     def test_task_status_not_found_for_other_report_type(self):
         queue = MagicMock()
         queue.get_task.return_value = SimpleNamespace(report_type="screening_screen")
         with patch.object(ta_endpoint, "get_task_queue", return_value=queue):
             response = self._client(_config()).get("/api/v1/tradingagents/tasks/abc")
         self.assertEqual(response.status_code, 404)
+
+
+class DeepModelOptionsTest(unittest.TestCase):
+    _OPTIONS = "openai_compatible:gpt-6.1-sol@proxy, deepseek:deepseek-v4-pro ,bad,deepseek:"
+
+    def test_parse_whitelist(self):
+        with _clean_env(), patch.dict(os.environ, {"TRADINGAGENTS_DEEP_MODEL_OPTIONS": self._OPTIONS}):
+            options = deep_model_options()
+        self.assertEqual([o["id"] for o in options], ["openai_compatible:gpt-6.1-sol", "deepseek:deepseek-v4-pro"])
+        self.assertTrue(options[0]["proxied"])
+        self.assertFalse(options[1]["proxied"])
+        self.assertIn("aihubmix", options[0]["label"])
+
+    def test_apply_switches_provider_and_proxy(self):
+        env = {"TRADINGAGENTS_DEEP_MODEL_OPTIONS": self._OPTIONS,
+               "TRADINGAGENTS_DEEP_THINK_PROXY": "http://proxy:8118"}
+        with _clean_env(), patch.dict(os.environ, env):
+            gpt = apply_deep_model({"deep_think_backend_url": "https://aihubmix.com/v1"},
+                                   "openai_compatible:gpt-6.1-sol")
+            ds = apply_deep_model({"deep_think_backend_url": "https://aihubmix.com/v1"}, "deepseek:deepseek-v4-pro")
+            untouched = apply_deep_model({"deep_think_llm": "x"}, None)
+            with self.assertRaises(TradingAgentsError):
+                apply_deep_model({}, "openai:gpt-4o")
+        self.assertEqual((gpt["deep_think_provider"], gpt["deep_think_llm"]), ("openai_compatible", "gpt-6.1-sol"))
+        self.assertEqual(gpt["deep_think_proxy"], "http://proxy:8118")
+        self.assertEqual(gpt["deep_think_backend_url"], "https://aihubmix.com/v1")
+        self.assertEqual((ds["deep_think_provider"], ds["deep_think_llm"]), ("deepseek", "deepseek-v4-pro"))
+        self.assertIsNone(ds["deep_think_proxy"])
+        self.assertIsNone(ds["deep_think_backend_url"])
+        self.assertEqual(untouched, {"deep_think_llm": "x"})
+
+    def test_status_lists_options_and_default(self):
+        env = {"TRADINGAGENTS_DEEP_MODEL_OPTIONS": self._OPTIONS, "TRADINGAGENTS_DEEP_THINK_LLM": "gpt-6.1-sol",
+               "TRADINGAGENTS_DEEP_THINK_PROVIDER": "openai_compatible"}
+        with _clean_env(), patch.dict(os.environ, env):
+            status = TradingAgentsService(_config()).status()
+        self.assertEqual(status["deep_model_default"], "openai_compatible:gpt-6.1-sol")
+        self.assertEqual(len(status["deep_model_options"]), 2)
 
 
 if __name__ == "__main__":

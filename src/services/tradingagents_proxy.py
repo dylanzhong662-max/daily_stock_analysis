@@ -121,7 +121,9 @@ def install_llm_tier_proxy() -> dict:
             return proxies
 
         def create_tier_client(config, tier, **extra):
-            proxy = resolve_tier_proxies().get(tier)
+            # 配置里显式给了 <tier>_think_proxy（可为 None，例如页面上把 deep 档换成直连的 DeepSeek）就以它为准
+            key = f"{tier}_think_proxy"
+            proxy = config.get(key) if key in config else resolve_tier_proxies().get(tier)
             if proxy:
                 import httpx
 

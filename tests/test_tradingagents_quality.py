@@ -141,6 +141,14 @@ class StatementGuideTest(unittest.TestCase):
         balance = quality._wrap_statement(MagicMock(return_value=text), guide=False)("X")
         self.assertNotIn("Period guide", balance)
 
+    def test_wrapper_keeps_latest_quarter_section_out_of_table(self):
+        extra = "\n## Latest quarter not yet in SEC XBRL (source: FMP)\n\n,2026-09-30 (quarter)\nRevenue,127577\n"
+        out = quality._wrap_statement(MagicMock(return_value=_SEC_INCOME + extra))("GOOGL", "quarterly", "2026-10-29")
+        self.assertTrue(out.endswith(extra))
+        guide = out[:-len(extra)]
+        self.assertIn("- Revenue: 2026-06-30 +24.2%", guide)
+        self.assertNotIn("127577", guide)  # 补充小节不参与主表同比
+
     def test_wrapper_appends_and_survives_bad_input(self):
         wrapped = quality._wrap_statement(MagicMock(return_value=_SEC_INCOME))
         self.assertTrue(wrapped("GOOGL", "quarterly", "2026-10-26").startswith(_SEC_INCOME))

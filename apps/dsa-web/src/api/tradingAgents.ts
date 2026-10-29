@@ -13,6 +13,8 @@ export type TradingAgentsStatus = {
   analysts: TradingAgentsAnalyst[];
   polymarketDefaultTopics?: string[];
   polymarketTickerTopic?: boolean;
+  deepModelOptions?: { id: string; label: string }[];
+  deepModelDefault?: string | null;
 };
 
 export type TradingAgentsTaskAccepted = {
@@ -71,6 +73,7 @@ export type StartTradingAgentsTaskPayload = {
   analysts?: TradingAgentsAnalyst[];
   polymarketTopics?: string[];
   useDefaultPolymarket?: boolean;
+  deepModel?: string;
 };
 
 const BASE = '/api/v1/tradingagents';
@@ -88,6 +91,7 @@ export const tradingAgentsApi = {
       analysts: payload.analysts,
       polymarket_topics: payload.polymarketTopics?.length ? payload.polymarketTopics : undefined,
       use_default_polymarket: payload.useDefaultPolymarket ?? true,
+      deep_model: payload.deepModel || undefined,
     });
     return toCamelCase<TradingAgentsTaskAccepted>(response.data);
   },

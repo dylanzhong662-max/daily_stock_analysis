@@ -23,6 +23,7 @@ import {
   InlineAlert,
   Input,
   PageHeader,
+  Select,
 } from '../components/common';
 import { ReportMarkdownBody } from '../components/report/ReportMarkdownBody';
 
@@ -74,6 +75,7 @@ const TradingAgentsPage: React.FC = () => {
   const [polymarketTopics, setPolymarketTopics] = useState('');
   const [useDefaultPolymarket, setUseDefaultPolymarket] = useState(true);
   const [analysts, setAnalysts] = useState<TradingAgentsAnalyst[]>(['market', 'news', 'fundamentals']);
+  const [deepModel, setDeepModel] = useState('');
 
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [taskMessage, setTaskMessage] = useState('');
@@ -132,6 +134,7 @@ const TradingAgentsPage: React.FC = () => {
         if (nextStatus.analysts?.length) {
           setAnalysts(nextStatus.analysts.filter((a) => TRADINGAGENTS_ANALYSTS.includes(a)));
         }
+        setDeepModel(nextStatus.deepModelDefault ?? nextStatus.deepModelOptions?.[0]?.id ?? '');
         const runningId = await tradingAgentsApi.getRunningTaskId();
         if (active && runningId) {
           attachTask(runningId, '已有研究任务在运行，正在等待结果');
@@ -232,6 +235,7 @@ const TradingAgentsPage: React.FC = () => {
           .map((t) => t.trim())
           .filter(Boolean),
         useDefaultPolymarket,
+        deepModel: deepModel || undefined,
       });
       attachTask(accepted.taskId, accepted.message);
     } catch (err) {
@@ -254,7 +258,7 @@ const TradingAgentsPage: React.FC = () => {
       <PageHeader
         eyebrow="TradingAgents"
         title="多智能体深度研究"
-        description="分析师团队 → 多空辩论 → 交易员 → 风控评审 → 组合经理，给出 5 档评级。数据来自 FMP（仅美股），模型为 DeepSeek。"
+        description="分析师团队 → 多空辩论 → 交易员 → 风控评审 → 组合经理，给出 5 档评级。数据来自 FMP / SEC（仅美股），分析师与辩论用 DeepSeek，研究经理与组合经理的模型可选。"
       />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -313,6 +317,15 @@ const TradingAgentsPage: React.FC = () => {
                   disabled={running}
                 />
               </div>
+              {status?.deepModelOptions?.length ? (
+                <Select
+                  label="研究经理 / 组合经理模型"
+                  value={deepModel}
+                  onChange={setDeepModel}
+                  options={status.deepModelOptions.map((o) => ({ value: o.id, label: o.label }))}
+                  disabled={running}
+                />
+              ) : null}
               <div className="flex flex-wrap gap-x-6 gap-y-2">
                 {TRADINGAGENTS_ANALYSTS.map((analyst) => (
                   <Checkbox
@@ -329,7 +342,7 @@ const TradingAgentsPage: React.FC = () => {
                   <BrainCircuit className="h-4 w-4" />
                   开始研究
                 </Button>
-                <span className="text-xs text-secondary-text">每次约 3–5 分钟，同一时间只能运行一个研究任务</span>
+                <span className="text-xs text-secondary-text">每次约 5–10 分钟，同一时间只能运行一个研究任务</span>
               </div>
             </form>
           </Card>
@@ -340,7 +353,7 @@ const TradingAgentsPage: React.FC = () => {
                 <Loader2 className="h-5 w-5 animate-spin text-cyan" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground">{taskMessage || '研究进行中'}</p>
-                  <p className="text-xs text-secondary-text">已用时 {formatElapsed(elapsed)}，预计 3–5 分钟</p>
+                  <p className="text-xs text-secondary-text">已用时 {formatElapsed(elapsed)}，预计 5–10 分钟</p>
                 </div>
               </div>
             </Card>

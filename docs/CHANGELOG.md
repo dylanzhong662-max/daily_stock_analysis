@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] TradingAgents 研究评估（`scripts/tradingagents_eval.sh`，并随每日结果评估任务运行）：评级 5/20 日超额收益与命中、数据误读规则检查、LLM 报告评审与人工评审表，分数写回 Langfuse；新增 `TRADINGAGENTS_EVAL_ENABLED`、`TRADINGAGENTS_EVAL_JUDGE`。
 - [改进] TradingAgents 报告评审可单独指定模型（`TRADINGAGENTS_EVAL_JUDGE_MODEL` / `_API_KEY` / `_BASE_URL` / `_PROXY`），避免研究模型给自己打分；换评审模型后版本号带模型名，全部报告重评一次，旧分数保留。
 - [新功能] TradingAgents 模型档位可单独走代理（`TRADINGAGENTS_DEEP_THINK_PROXY` / `TRADINGAGENTS_QUICK_THINK_PROXY`），用于 deep 档接境外网关（如 aihubmix 上的 GPT）而 quick 档 DeepSeek 仍直连；经 OpenAI 兼容网关调用 GPT 时结构化输出改用 json_schema，避免经理节点结构化失败后重试。
+- [修复] TradingAgents 财报滞后：业绩 8-K 发布到 10-Q 申报之间，SEC 报表后补上 FMP 已收录的最新季度并标注来源，避免基本面只能引用新闻转述的数字。
+- [修复] TradingAgents 股价滞后：当天研究在盘前/盘后价格与上一收盘相差 3% 以上时，提示所有角色按最新成交价重估技术位与目标价。
+- [新功能] TradingAgents 网页可选研究经理/组合经理模型（服务端白名单 `TRADINGAGENTS_DEEP_MODEL_OPTIONS`），预计耗时提示改为 5–10 分钟。
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
