@@ -421,9 +421,17 @@ class TradingAgentsService:
             install_quality_patches()
         except Exception as exc:  # TradingAgents 内部结构变化时降级为原始工具输出，研究照常进行
             logger.warning("[TradingAgents] data quality patches skipped: %s", exc)
-        from src.services.tradingagents_proxy import disable_stocktwits_if_configured, install_social_proxy
+        from src.services.tradingagents_proxy import (
+            disable_stocktwits_if_configured,
+            install_gpt_structured_output,
+            install_llm_tier_proxy,
+            install_social_proxy,
+        )
 
         install_social_proxy()
+        # 不吞异常：配了档位代理却没装上，该档模型必然连不上，直接报错比跑到一半失败更清楚
+        install_llm_tier_proxy()
+        install_gpt_structured_output()
         company_name = None
         if data_source == "fmp":
             from src.services.tradingagents_fmp import get_company_profile

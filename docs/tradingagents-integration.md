@@ -69,6 +69,7 @@ pip install -r requirements-tradingagents.txt   # 固定在 v0.6.0 tag
 3. deep 与 quick 两个档位默认使用同一个模型，可以分别用 `TRADINGAGENTS_DEEP_THINK_LLM` 和 `TRADINGAGENTS_QUICK_THINK_LLM` 覆盖。
    - deep 用于研究经理和组合经理，适合推理更强的模型。
    - quick 用于分析师、辩论、交易员和记忆复盘。
+   - deep 档可以单独换 provider：`TRADINGAGENTS_DEEP_THINK_PROVIDER` / `_LLM` / `_BACKEND_URL`（TradingAgents 原生变量）；境外网关在机房直连不通时，用 `TRADINGAGENTS_DEEP_THINK_PROXY`（或 `_QUICK_THINK_PROXY`）只让该档模型走代理。
    - DeepSeek 的 `deepseek-chat` / `deepseek-reasoner` 已是废弃别名，都指向 V4.1 Flash；要让两档真正分开，用 `TRADINGAGENTS_DEEP_THINK_LLM=deepseek-v4-pro`、`TRADINGAGENTS_QUICK_THINK_LLM=deepseek-flash`。
 4. TradingAgents 只从环境变量读取 API Key。如果对应变量没有设置，DSA 会在运行时把推导出的 Key 写入当前进程的环境变量；已有的值不会被覆盖。
 5. `TRADINGAGENTS_OUTPUT_LANGUAGE` 未设置时，按 `REPORT_LANGUAGE` 选择 Chinese、English 或 Korean。

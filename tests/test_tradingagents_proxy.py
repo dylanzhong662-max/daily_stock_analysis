@@ -122,5 +122,52 @@ class ProxyUrlopenTest(unittest.TestCase):
             self.assertTrue(hasattr(polymarket.requests, "RequestException"))
 
 
+class TierProxyTest(unittest.TestCase):
+    def test_no_env_means_no_install(self):
+        from src.services import tradingagents_proxy as px
+
+        with patch.dict(os.environ, {env: "" for env in px.TIER_PROXY_ENVS.values()}):
+            self.assertEqual(px.install_llm_tier_proxy(), {})
+
+    @unittest.skipUnless(_HAS_TA, "tradingagents not installed")
+    def test_only_proxied_tier_gets_http_client(self):
+        from tradingagents.graph import trading_graph
+
+        from src.services import tradingagents_proxy as px
+
+        original = trading_graph.create_tier_client
+        self.addCleanup(setattr, trading_graph, "create_tier_client", original)
+        seen = {}
+        trading_graph.create_tier_client = lambda config, tier, **extra: seen.setdefault(tier, extra)
+        with patch.dict(os.environ, {px.TIER_PROXY_ENVS["deep"]: "http://proxy:8118",
+                                     px.TIER_PROXY_ENVS["quick"]: ""}):
+            self.assertEqual(px.install_llm_tier_proxy(), {"deep": "http://proxy:8118"})
+            px.install_llm_tier_proxy()  # 幂等，不重复包装
+            trading_graph.create_tier_client({}, "deep", callbacks=[])
+            trading_graph.create_tier_client({}, "quick", callbacks=[])
+        self.assertIn("http_client", seen["deep"])
+        self.assertIn("http_async_client", seen["deep"])
+        self.assertEqual(seen["quick"], {"callbacks": []})
+
+
+    @unittest.skipUnless(_HAS_TA, "tradingagents not installed")
+    def test_gpt_uses_json_schema_others_unchanged(self):
+        from tradingagents.llm_clients import capabilities, openai_client
+
+        from src.services import tradingagents_proxy as px
+
+        originals = (capabilities.get_capabilities, openai_client.get_capabilities)
+
+        def restore():
+            capabilities.get_capabilities, openai_client.get_capabilities = originals
+
+        self.addCleanup(restore)
+        before = capabilities.get_capabilities("deepseek-flash")
+        with patch.object(px, "_gpt_structured_installed", False):
+            px.install_gpt_structured_output()
+        self.assertEqual(openai_client.get_capabilities("gpt-6.1-sol").preferred_structured_method, "json_schema")
+        self.assertEqual(openai_client.get_capabilities("deepseek-flash"), before)
+
+
 if __name__ == "__main__":
     unittest.main()

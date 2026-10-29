@@ -8,6 +8,9 @@ FMP、SEC、DeepSeek 等仍直连。
 - Reddit / StockTwits：替换模块内的 ``urlopen``，经代理请求；Reddit 对代理出口 IP
   的 429 限流较频繁，这里额外做几次退避重试（TradingAgents 自身只重试一次）。
 - Polymarket：替换模块内的 ``requests``，给 ``get`` 带上 proxies。
+
+模型档位也可以单独走代理：``TRADINGAGENTS_DEEP_THINK_PROXY`` / ``TRADINGAGENTS_QUICK_THINK_PROXY``
+只给对应档位的 LLM 客户端带上代理（例如 deep 档用境外网关上的 GPT，quick 档的 DeepSeek 仍直连）。
 """
 
 from __future__ import annotations
@@ -89,6 +92,81 @@ def install_social_proxy(proxy: Optional[str] = None) -> Optional[str]:
         _installed_proxy = proxy
         logger.info("[TradingAgents] social/prediction-market sources routed via proxy")
         return proxy
+
+
+TIER_PROXY_ENVS = {"deep": "TRADINGAGENTS_DEEP_THINK_PROXY", "quick": "TRADINGAGENTS_QUICK_THINK_PROXY"}
+# 推理模型单次调用可能要几分钟
+_LLM_PROXY_TIMEOUT_SECONDS = 600
+_TIER_PATCHED_ATTR = "_dsa_tier_proxy"
+
+
+def resolve_tier_proxies() -> dict:
+    return {tier: value for tier, env in TIER_PROXY_ENVS.items()
+            if (value := (os.environ.get(env) or "").strip())}
+
+
+def install_llm_tier_proxy() -> dict:
+    """给设置了代理的模型档位注入走代理的 httpx 客户端（幂等；每次建图时按当前环境变量生效）。
+
+    TradingAgents 的 OpenAI 兼容客户端会把 ``http_client`` / ``http_async_client`` 透传给 ChatOpenAI。
+    """
+    proxies = resolve_tier_proxies()
+    if not proxies:
+        return {}
+    from tradingagents.graph import trading_graph
+
+    with _lock:
+        original = trading_graph.create_tier_client
+        if getattr(original, _TIER_PATCHED_ATTR, False):
+            return proxies
+
+        def create_tier_client(config, tier, **extra):
+            proxy = resolve_tier_proxies().get(tier)
+            if proxy:
+                import httpx
+
+                extra.setdefault("http_client", httpx.Client(proxy=proxy, timeout=_LLM_PROXY_TIMEOUT_SECONDS))
+                extra.setdefault("http_async_client",
+                                 httpx.AsyncClient(proxy=proxy, timeout=_LLM_PROXY_TIMEOUT_SECONDS))
+            return original(config, tier, **extra)
+
+        setattr(create_tier_client, _TIER_PATCHED_ATTR, True)
+        trading_graph.create_tier_client = create_tier_client
+    logger.info("[TradingAgents] LLM tiers routed via proxy: %s", ",".join(sorted(proxies)))
+    return proxies
+
+
+_GPT_MODEL_RE = re.compile(r"^(?:openai/)?gpt-\d", re.I)
+_gpt_structured_installed = False
+
+
+def install_gpt_structured_output() -> None:
+    """经 OpenAI 兼容网关（openai_compatible）调用 GPT 时，结构化输出改用 json_schema（幂等）。
+
+    该 provider 的客户端会去掉 tool_choice；GPT 在长 prompt 下常直接写正文、不调 schema 工具，
+    结构化结果为空、每个经理节点白白多一次自由文本重试。json_schema 由服务端强制格式。
+    """
+    global _gpt_structured_installed
+    with _lock:
+        if _gpt_structured_installed:
+            return
+        from tradingagents.llm_clients import capabilities
+
+        original = capabilities.get_capabilities
+        json_schema = capabilities.ModelCapabilities(
+            supports_tool_choice=True, supports_json_mode=True, supports_json_schema=True,
+            preferred_structured_method="json_schema",
+        )
+
+        def get_capabilities(model_name: str):
+            return json_schema if _GPT_MODEL_RE.match(model_name or "") else original(model_name)
+
+        capabilities.get_capabilities = get_capabilities
+        from tradingagents.llm_clients import openai_client
+
+        # openai_client 是 from-import，需要一起替换
+        openai_client.get_capabilities = get_capabilities
+        _gpt_structured_installed = True
 
 
 def _stocktwits_disabled_block(ticker: str, *args, **kwargs) -> str:

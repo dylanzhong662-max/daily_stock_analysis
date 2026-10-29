@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] TradingAgents 报告 LLM 评审升级为 report-quality-v2：评审前注入已核实事实（历史长度、申报同比、FRED CPI、各角色评级与偏移、规则命中句），按 rubric 锚点打分并推导总体分，评级偏离分析师 ≥1 档时多空平衡封顶 acceptable；`import-review` 新增 `--source claude` 导入非人工参考标签。
 - [新功能] TradingAgents 研究评估（`scripts/tradingagents_eval.sh`，并随每日结果评估任务运行）：评级 5/20 日超额收益与命中、数据误读规则检查、LLM 报告评审与人工评审表，分数写回 Langfuse；新增 `TRADINGAGENTS_EVAL_ENABLED`、`TRADINGAGENTS_EVAL_JUDGE`。
 - [改进] TradingAgents 报告评审可单独指定模型（`TRADINGAGENTS_EVAL_JUDGE_MODEL` / `_API_KEY` / `_BASE_URL` / `_PROXY`），避免研究模型给自己打分；换评审模型后版本号带模型名，全部报告重评一次，旧分数保留。
+- [新功能] TradingAgents 模型档位可单独走代理（`TRADINGAGENTS_DEEP_THINK_PROXY` / `TRADINGAGENTS_QUICK_THINK_PROXY`），用于 deep 档接境外网关（如 aihubmix 上的 GPT）而 quick 档 DeepSeek 仍直连；经 OpenAI 兼容网关调用 GPT 时结构化输出改用 json_schema，避免经理节点结构化失败后重试。
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
