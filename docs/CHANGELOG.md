@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] Polymarket 参考按事件分组展示完整分档分布并过滤低成交量/无关事件；FMP 模式下 ETF 基本面改为基金概况、报表返回“不适用”；新增 `TRADINGAGENTS_DISABLE_STOCKTWITS`。
 - [修复] FMP 模式下历史决策复盘在持有窗口尚未交易时不再报“无数据”失败，按原逻辑留待下次复盘。
 - [改进] TradingAgents 情绪分析扩大 Reddit 覆盖（代码 OR 公司名、6 个版块 + 个股版块、每版块 8 帖），Reddit 429 退避加长；Polymarket 分档概率之和明显偏离 100% 时提示模型谨慎解读。
+- [修复] TradingAgents 数据质量：价格历史不足时长窗口均线/52 周区间标为 N/A，SEC 季报附期间指引与同期同比（避免缺 Q4 导致季度错位），FRED 月度/季度序列补真实同比，Polymarket 触及型盘口加读法说明与距现价标注，反思记忆不再注入其他股票的教训。
+- [新功能] TradingAgents 研究接入 Langfuse（官方 LangChain CallbackHandler，新增依赖 `langchain`）：每次研究一条 trace，含各角色、模型调用 token 与工具调用；默认只上报计数，`TRADINGAGENTS_LANGFUSE_CAPTURE_CONTENT=true` 时上报原文。
+- [改进] TradingAgents 注入内容精简：Polymarket 参考全文只给新闻分析师与组合经理，新闻正文截断 400 字并合并律所集体诉讼招揽稿，内部人交易只列公开市场买卖，三大报表只留最近 12 期。
+- [改进] TradingAgents 报告 LLM 评审升级为 report-quality-v2：评审前注入已核实事实（历史长度、申报同比、FRED CPI、各角色评级与偏移、规则命中句），按 rubric 锚点打分并推导总体分，评级偏离分析师 ≥1 档时多空平衡封顶 acceptable；`import-review` 新增 `--source claude` 导入非人工参考标签。
+- [新功能] TradingAgents 研究评估（`scripts/tradingagents_eval.sh`，并随每日结果评估任务运行）：评级 5/20 日超额收益与命中、数据误读规则检查、LLM 报告评审与人工评审表，分数写回 Langfuse；新增 `TRADINGAGENTS_EVAL_ENABLED`、`TRADINGAGENTS_EVAL_JUDGE`。
+- [改进] TradingAgents 报告评审可单独指定模型（`TRADINGAGENTS_EVAL_JUDGE_MODEL` / `_API_KEY` / `_BASE_URL` / `_PROXY`），避免研究模型给自己打分；换评审模型后版本号带模型名，全部报告重评一次，旧分数保留。
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->

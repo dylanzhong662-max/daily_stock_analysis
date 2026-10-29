@@ -157,6 +157,17 @@ def run_backtest_evaluation_once() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.exception("[EvalLoop] skill-opinion outcomes failed: %s", exc)
 
+    try:
+        from src.config import get_config
+        from src.services.tradingagents_eval import EVAL_ENABLED_ENV, _env_flag, run_evaluation
+
+        config = get_config()
+        if getattr(config, "tradingagents_enabled", False) and _env_flag(EVAL_ENABLED_ENV):
+            result = run_evaluation(config)
+            logger.info("[EvalLoop] tradingagents evaluation done: %s", _brief_result(result))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("[EvalLoop] tradingagents evaluation failed: %s", exc)
+
 
 def build_backtest_evaluation_background_tasks(config: Config) -> List[Dict[str, Any]]:
     """Build the daily forward-outcome evaluation background task.
