@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import gc
 import importlib
+import json
 import logging
 import os
 import re
@@ -342,12 +343,19 @@ def _normalize_topics(topics: Optional[List[str]]) -> List[str]:
 
 
 def _inject_context(graph: Any, extra: str) -> None:
-    """把参考块追加到每个角色都会读取的 instrument_context。"""
+    """把参考块（带标记）追加到 instrument_context；只有新闻分析师与组合经理读到全文。"""
+    from src.services.tradingagents_polymarket import install_reference_scope, mark_reference
+
+    try:
+        install_reference_scope()
+    except Exception as exc:  # 作用域补丁失败时退回旧行为：所有角色都读到参考块
+        logger.warning("[TradingAgents] Polymarket reference scope skipped: %s", exc)
     original = graph.create_run_state
+    block = mark_reference(extra)
 
     def create_run_state(*args, **kwargs):
         state = original(*args, **kwargs)
-        state["instrument_context"] = f"{state.get('instrument_context') or ''}\n\n{extra}".strip()
+        state["instrument_context"] = f"{state.get('instrument_context') or ''}\n\n{block}".strip()
         return state
 
     graph.create_run_state = create_run_state
@@ -406,6 +414,13 @@ class TradingAgentsService:
 
             install_fmp_vendor(resolve_fmp_api_key(self.config))
             apply_fmp_config(ta_config)
+        from src.services.tradingagents_quality import install_quality_patches
+
+        # 在 FMP vendor 之后安装，才能一并包装它的报表实现
+        try:
+            install_quality_patches()
+        except Exception as exc:  # TradingAgents 内部结构变化时降级为原始工具输出，研究照常进行
+            logger.warning("[TradingAgents] data quality patches skipped: %s", exc)
         from src.services.tradingagents_proxy import disable_stocktwits_if_configured, install_social_proxy
 
         install_social_proxy()
@@ -440,8 +455,33 @@ class TradingAgentsService:
             reference, used_topics = "", []
         if reference:
             _inject_context(graph, reference)
-        state, rating = graph.propagate(ticker, run_date)
-        report_md_path = Path(graph.save_reports(state, ticker))
+        from src.services.tradingagents_langfuse import research_trace, trace_url
+
+        trace_meta = {
+            "llm_provider": ta_config.get("llm_provider"),
+            "deep_think_llm": ta_config.get("deep_think_llm"),
+            "quick_think_llm": ta_config.get("quick_think_llm"),
+            "data_source": data_source,
+            "polymarket_topics": ",".join(used_topics),
+        }
+        with research_trace(ticker=ticker, trade_date=run_date, analysts=selected, metadata=trace_meta) as trace:
+            trace.attach(graph)
+            try:
+                state, rating = graph.propagate(ticker, run_date)
+                report_md_path = Path(graph.save_reports(state, ticker))
+            except Exception as exc:
+                trace.finish(error=exc)
+                raise
+            trace.finish(rating=rating, report_id=report_md_path.parent.name)
+            url = trace_url(trace)
+            if url:
+                logger.info("[TradingAgents] Langfuse trace: %s", url)
+            if trace.trace_id:
+                # 评估任务据此把分数挂到这次研究的 trace 上
+                ref_dir = report_md_path.parent / "0_reference"
+                ref_dir.mkdir(parents=True, exist_ok=True)
+                (ref_dir / "langfuse.json").write_text(
+                    json.dumps({"trace_id": trace.trace_id, "trace_url": url}), encoding="utf-8")
         if reference:
             ref_dir = report_md_path.parent / "0_reference"
             ref_dir.mkdir(parents=True, exist_ok=True)

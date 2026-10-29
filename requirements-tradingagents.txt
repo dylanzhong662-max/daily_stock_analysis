@@ -2,3 +2,5 @@
 # Requires Python >= 3.11 and pulls in pandas >= 3 / langchain / langgraph.
 # See docs/tradingagents-integration.md before installing into the main environment.
 tradingagents @ git+https://github.com/TauricResearch/TradingAgents.git@v0.6.0
+# Langfuse 官方 LangChain CallbackHandler（TradingAgents 观测）需要 langchain 包；版本与镜像内 langchain-core/langgraph 兼容
+langchain==1.4.6

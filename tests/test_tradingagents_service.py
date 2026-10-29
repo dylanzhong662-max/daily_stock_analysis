@@ -464,10 +464,15 @@ class PolymarketReferenceTest(unittest.TestCase):
         with self.assertRaises(TradingAgentsError):
             svc._normalize_topics([f"t{i}" for i in range(6)])
 
-    def test_inject_context_appends_to_every_run_state(self):
+    def test_inject_context_appends_marked_block_to_every_run_state(self):
+        from src.services import tradingagents_polymarket as pm
+
         graph = SimpleNamespace(create_run_state=lambda *a, **k: {"instrument_context": "ticker NVDA"})
         svc._inject_context(graph, "## Polymarket ref")
-        self.assertEqual(graph.create_run_state("NVDA", "2026-10-20")["instrument_context"], "ticker NVDA\n\n## Polymarket ref")
+        context = graph.create_run_state("NVDA", "2026-10-20")["instrument_context"]
+        self.assertEqual(context, "ticker NVDA\n\n" + pm.mark_reference("## Polymarket ref"))
+        # 非新闻/组合经理角色读到的是去掉全文后的一行指引
+        self.assertEqual(pm.strip_reference(context), "ticker NVDA\n\n" + pm.REFERENCE_POINTER)
 
     def test_analyze_injects_reference_and_saves_it(self):
         with tempfile.TemporaryDirectory() as tmp:

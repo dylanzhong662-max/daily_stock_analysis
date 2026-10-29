@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Iterator, Optional
 
 
@@ -19,15 +20,69 @@ def _enabled() -> bool:
     )
 
 
-def _client() -> Optional[Any]:
+CAPTURE_CONTENT_ENV = "TRADINGAGENTS_LANGFUSE_CAPTURE_CONTENT"
+# 脱敏范围内，超过这个长度的字符串视为“内容”（prompt、新闻、报告、工具输出），只上报长度
+_MASK_MIN_CHARS = 200
+_initialized = False
+_redact_scope: ContextVar[bool] = ContextVar("langfuse_redact_scope", default=False)
+
+
+def capture_content() -> bool:
+    return os.getenv(CAPTURE_CONTENT_ENV, "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _redact(data: Any) -> Any:
+    if isinstance(data, str):
+        return f"[omitted: {len(data)} chars]" if len(data) >= _MASK_MIN_CHARS else data
+    if isinstance(data, dict):
+        return {key: _redact(value) for key, value in data.items()}
+    if isinstance(data, (list, tuple)):
+        return [_redact(value) for value in data]
+    return data
+
+
+def mask_long_content(*, data: Any, **_kwargs: Any) -> Any:
+    """Langfuse mask hook: inside ``redacted_content()`` replace long text with its length.
+
+    Framework integrations (the LangChain callback used by TradingAgents) export full
+    prompts and outputs; the scope keeps them to counts while the Agent's own compact
+    observations elsewhere in the process stay as they are.
+    """
+    return _redact(data) if _redact_scope.get() else data
+
+
+@contextmanager
+def redacted_content() -> Iterator[None]:
+    """Observations created in this context (and its child contexts) carry no long content."""
+    token = _redact_scope.set(not capture_content())
+    try:
+        yield
+    finally:
+        _redact_scope.reset(token)
+
+
+def langfuse_client() -> Optional[Any]:
+    """Process-wide Langfuse client, or None when tracing is disabled or unavailable.
+
+    The first construction fixes the mask for the whole process (the SDK keeps one
+    client per public key), so every caller must come through here.
+    """
+    global _initialized
     if not _enabled():
         return None
     try:
-        from langfuse import get_client
+        from langfuse import Langfuse, get_client
 
+        if not _initialized:
+            Langfuse(mask=mask_long_content)
+            _initialized = True
         return get_client()
     except Exception:
         return None
+
+
+def _client() -> Optional[Any]:
+    return langfuse_client()
 
 
 def _update(observation: Any, **values: Any) -> None:
