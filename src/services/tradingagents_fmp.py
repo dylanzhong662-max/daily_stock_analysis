@@ -20,6 +20,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -248,6 +249,22 @@ def _etf_fundamentals(canonical: str, profile: Dict[str, Any], quote: Dict[str, 
     return f"# Fund Profile for {canonical} (ETF, source: FMP)\n\n" + "\n".join(lines)
 
 
+def _price_history_span(canonical: str, as_of_date: Optional[str]) -> Optional[tuple]:
+    """价格历史不满一年时返回 (近 400 天交易日行数, 首个交易日)；满一年或取不到时返回 None。"""
+    end = datetime.strptime(as_of_date, "%Y-%m-%d") if as_of_date else datetime.now()
+    start = end - timedelta(days=400)
+    try:
+        frame = fetch_history(canonical, start.strftime("%Y-%m-%d"), (end + timedelta(days=1)).strftime("%Y-%m-%d"))
+    except _errors().VendorError as exc:
+        logger.info("[TradingAgents/FMP] price history check skipped for %s: %s", canonical, exc)
+        return None
+    first = frame.index[0]
+    # 窗口取 400 天：首个交易日落在一年内说明是新上市，而不是窗口截断
+    if first > pd.Timestamp(end - timedelta(days=365)):
+        return len(frame), first.strftime("%Y-%m-%d")
+    return None
+
+
 def get_fundamentals(ticker: str, as_of_date: Optional[str] = None) -> str:
     from tradingagents.dataflows.date_window import withhold_live_profile
 
@@ -279,6 +296,19 @@ def get_fundamentals(ticker: str, as_of_date: Optional[str] = None) -> str:
     def money(value):
         return None if value is None else f"{value} {currency}" if currency else value
 
+    week_range, avg50, avg200 = profile.get("range"), money(quote.get("priceAvg50")), money(quote.get("priceAvg200"))
+    history = _price_history_span(canonical, as_of_date)
+    if history:
+        # 新上市（如 ADR）不足一年时，FMP 的均线/52 周区间只是上市以来的统计
+        rows, first_date = history
+        short = f"N/A (only {rows} trading days of price history since {first_date})"
+        if rows < 200:
+            avg200 = short
+        if rows < 50:
+            avg50 = short
+        if week_range:
+            week_range = f"{week_range} (since first trade {first_date}, not a full 52 weeks)"
+
     fields = [
         ("Name", profile.get("companyName")),
         ("Sector", profile.get("sector")),
@@ -286,9 +316,9 @@ def get_fundamentals(ticker: str, as_of_date: Optional[str] = None) -> str:
         ("Exchange", profile.get("exchange")),
         ("Market Cap", money(profile.get("marketCap"))),
         ("Price", money(profile.get("price"))),
-        ("52 Week Range", profile.get("range")),
-        ("50 Day Average", money(quote.get("priceAvg50"))),
-        ("200 Day Average", money(quote.get("priceAvg200"))),
+        ("52 Week Range", week_range),
+        ("50 Day Average", avg50),
+        ("200 Day Average", avg200),
         ("Beta", profile.get("beta")),
         ("PE Ratio (TTM)", ratios.get("priceToEarningsRatioTTM")),
         ("PEG Ratio (TTM)", ratios.get("priceToEarningsGrowthRatioTTM")),
@@ -343,17 +373,40 @@ def get_income_statement(ticker: str, freq: str = "quarterly", as_of_date: Optio
     return _statement("income-statement", "Income Statement", ticker, freq, as_of_date)
 
 
+NEWS_TEXT_MAX_CHARS = 400
+# 律所集体诉讼招揽稿：同一案件会被十几家律所反复推送，只保留一条
+_LAW_FIRM_RE = re.compile(
+    r"class action|investor alert|lead plaintiff|securities fraud|shareholder alert|investors who lost|"
+    r"rosen law|faruqi|pomerantz|kaplan fox|levi & korsinsky|bronstein|glancy|bragar|schall law|"
+    r"howard g\. smith|block & leviton|bfa law|robbins geller|kessler topaz|gainey mckenna|portnoy law",
+    re.IGNORECASE,
+)
+
+
+def _is_law_firm_solicitation(row: Dict[str, Any]) -> bool:
+    return bool(_LAW_FIRM_RE.search(f"{row.get('title') or ''} {row.get('text') or ''}"))
+
+
 def _format_news(rows: List[Dict[str, Any]]) -> str:
     out = []
+    solicitations = 0
     for row in rows:
+        if _is_law_firm_solicitation(row):
+            solicitations += 1
+            if solicitations > 1:
+                continue
         source = row.get("publisher") or row.get("site") or "Unknown"
         published = str(row.get("publishedDate") or "")[:16]
         block = f"### {row.get('title') or 'No title'} (source: {source}, {published})\n"
-        if row.get("text"):
-            block += f"{row['text']}\n"
+        text = " ".join(str(row.get("text") or "").split())
+        if text:
+            block += f"{text[:NEWS_TEXT_MAX_CHARS]}{'…' if len(text) > NEWS_TEXT_MAX_CHARS else ''}\n"
         if row.get("url"):
             block += f"Link: {row['url']}\n"
         out.append(block)
+    if solicitations > 1:
+        out.append(f"_{solicitations - 1} more law-firm class-action solicitations about the same matter were "
+                   f"omitted; they repeat one lawsuit notice and carry no new information._\n")
     return "\n".join(out)
 
 
@@ -396,10 +449,31 @@ def get_insider_transactions(ticker: str, as_of_date: Optional[str] = None) -> s
         rows = [r for r in rows if str(r.get("filingDate") or "")[:10] <= as_of_date]
     if not rows:
         return f"No insider transactions filed for {canonical} by {as_of_date or 'today'} (source: FMP)"
-    keep = ["filingDate", "transactionDate", "reportingName", "typeOfOwner", "transactionType",
-            "acquisitionOrDisposition", "securitiesTransacted", "price", "securitiesOwned"]
-    frame = pd.DataFrame(rows)[[c for c in keep if c in rows[0]]]
-    return f"# Insider transactions for {canonical} (source: FMP, filed by {as_of_date or 'today'})\n" + frame.to_csv(index=False)
+    header = f"# Insider transactions for {canonical} (source: FMP, filed by {as_of_date or 'today'})\n"
+    # 只有公开市场买卖（Form 4 代码 P/S）反映内部人的主动判断；代扣税、行权、赠与、授予只汇总
+    market = [r for r in rows if str(r.get("transactionType") or "")[:2] in ("P-", "S-")]
+    other = [r for r in rows if r not in market]
+    lines = []
+    if market:
+        keep = ["filingDate", "transactionDate", "reportingName", "typeOfOwner", "transactionType",
+                "securitiesTransacted", "price", "securitiesOwned"]
+        lines.append("Open-market purchases (P) and sales (S):\n"
+                     + pd.DataFrame(market)[[c for c in keep if c in market[0]]].to_csv(index=False))
+    else:
+        lines.append("No open-market purchases or sales in these filings.\n")
+    if other:
+        counts: Dict[str, int] = {}
+        for row in other:
+            kind = str(row.get("transactionType") or "unspecified")
+            counts[kind] = counts.get(kind, 0) + 1
+        people = sorted({str(r.get("reportingName")) for r in other if r.get("reportingName")})
+        summary = ", ".join(f"{kind} ×{n}" for kind, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+        lines.append(
+            f"Other filings (not open-market trades: tax withholding, option exercise, gifts, awards): "
+            f"{summary}; {len(people)} reporting person(s): {', '.join(people[:8])}"
+            f"{' …' if len(people) > 8 else ''}.\n"
+        )
+    return header + "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

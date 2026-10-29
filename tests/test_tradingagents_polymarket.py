@@ -144,6 +144,63 @@ class PolymarketReferenceTest(unittest.TestCase):
         with self._env(**{pm.TOPICS_ENV: "none", pm.TICKER_ENV: "false"}):
             self.assertEqual(pm.build_reference("NVDA", "2026-10-20", [], use_defaults=True), ("", []))
 
+    def test_touch_markets_explained_with_distance_and_ladder_check(self):
+        event = _event("e-hit", "What will Alphabet Inc. (GOOGL) hit in October 2026?", [
+            _market("u1", "up 360", 50_000, prob="0.24", group="↑ $360"),
+            _market("u2", "up 370", 50_000, prob="0.12", group="↑ $370"),
+            _market("u3", "up 390", 50_000, prob="0.14", group="↑ $390"),
+            _market("d1", "down 320", 50_000, prob="0.91", group="↓ $320"),
+            _market("d2", "down 310", 50_000, prob="0.61", group="↓ $310"),
+        ])
+        text = pm._format_event(event, event["markets"], lambda v: json.loads(v), ("2026-10-23", 320.21))
+        self.assertIn("How to read: touch markets", text)
+        self.assertIn("not closing-price forecasts", text)
+        self.assertIn("Last close: 320.21 (2026-10-23)", text)
+        self.assertIn("↓ $320: 91% (resolves 2099-01-01, 1w +2.0pp, 0.1% below last close)", text)
+        self.assertIn("↑ $360: 24% (resolves 2099-01-01, 1w +2.0pp, 12.4% above last close)", text)
+        self.assertIn("not monotonic (↑ $390 14% > ↑ $370 12%)", text)
+        # 普通“截至某日”档位不加触及说明
+        plain = _event("e-ipo", "Anthropic IPO by __?", [
+            _market("a", "Nov", 50_000, prob="0.2", group="November 30, 2026"),
+            _market("b", "Dec", 50_000, prob="0.8", group="December 31, 2026"),
+        ])
+        self.assertNotIn("touch markets", pm._format_event(plain, plain["markets"], lambda v: json.loads(v)))
+
+    def test_monotonic_touch_ladder_not_flagged(self):
+        event = _event("e-hit", "What will X hit?", [
+            _market("u1", "up 150", 50_000, prob="0.43", group="↑ $150"),
+            _market("u2", "up 153", 50_000, prob="0.36", group="↑ $153"),
+            _market("d1", "down 135", 50_000, prob="0.71", group="↓ $135"),
+            _market("d2", "down 132", 50_000, prob="0.57", group="↓ $132"),
+        ])
+        text = pm._format_event(event, event["markets"], lambda v: json.loads(v))
+        self.assertIn("touch markets", text)
+        self.assertNotIn("not monotonic", text)
+        self.assertNotIn("Last close", text)
+
+    def test_reference_scope_strips_block_for_other_roles(self):
+        names = ("market_analyst", "news_analyst", "portfolio_manager")
+        modules = {}
+        for short in names:
+            module = types.ModuleType(short)
+            module.get_instrument_context_from_state = lambda state: state["instrument_context"]
+            modules[short] = module
+        state = {"instrument_context": "ticker GOOGL\n\n" + pm.mark_reference("## odds table")}
+        with patch.object(pm, "_POINTER_ONLY_MODULES", ("market_analyst",)), \
+                patch("importlib.import_module", side_effect=lambda name: modules[name]):
+            pm.install_reference_scope()
+            pm.install_reference_scope()  # 幂等：不会重复包装
+        self.assertEqual(modules["market_analyst"].get_instrument_context_from_state(state),
+                         "ticker GOOGL\n\n" + pm.REFERENCE_POINTER)
+        self.assertIn("## odds table", modules["news_analyst"].get_instrument_context_from_state(state))
+        self.assertIn("## odds table", modules["portfolio_manager"].get_instrument_context_from_state(state))
+        self.assertEqual(pm.strip_reference("no reference here"), "no reference here")
+
+    def test_uk_spelling_is_filtered_from_us_macro(self):
+        self.assertTrue(pm._NON_US_MACRO_RE.search("U.K. Annual Inflation 2026"))
+        self.assertTrue(pm._NON_US_MACRO_RE.search("South Africa Annual Inflation 2026"))
+        self.assertFalse(pm._NON_US_MACRO_RE.search("How high will inflation get in 2026?"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import unittest
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -101,6 +102,38 @@ class FmpAdapterTest(unittest.TestCase):
         self.assertIn("A", out)
         self.assertNotIn("LATE", out)
 
+    def test_news_truncates_text_and_collapses_law_firm_solicitations(self):
+        rows = [{"publishedDate": "2026-10-15 10:00:00", "title": "Cloud revenue jumps", "publisher": "CNBC",
+                 "text": "x" * 900}]
+        rows += [{"publishedDate": "2026-10-15 11:00:00", "publisher": "GlobeNewswire",
+                  "title": f"{firm} Reminds Alphabet Investors of Class Action Lead Plaintiff Deadline"}
+                 for firm in ("Rosen Law Firm", "Faruqi & Faruqi", "Kaplan Fox")]
+        self.client.session.get.return_value = _response(payload=rows)
+        with patch("tradingagents.dataflows.config.get_config", return_value={"news_article_limit": 20}):
+            out = self.fmp.get_news("GOOGL", "2026-10-08", "2026-10-15")
+        self.assertIn("x" * 400 + "…", out)
+        self.assertNotIn("x" * 401, out)
+        self.assertIn("Rosen Law Firm", out)
+        self.assertNotIn("Kaplan Fox", out)
+        self.assertIn("2 more law-firm class-action solicitations", out)
+
+    def test_insider_keeps_open_market_trades_and_summarises_the_rest(self):
+        self.client.session.get.return_value = _response(payload=[
+            {"filingDate": "2026-10-01", "transactionDate": "2026-09-30", "reportingName": "Arnold Frances",
+             "transactionType": "S-Sale", "securitiesTransacted": 83, "price": 340.45},
+            {"filingDate": "2026-09-26", "transactionDate": "2026-09-25", "reportingName": "Pichai Sundar",
+             "transactionType": "F-InKind", "securitiesTransacted": 1000, "price": 339.01},
+            {"filingDate": "2026-09-26", "transactionDate": "2026-09-25", "reportingName": "Porat Ruth",
+             "transactionType": "F-InKind", "securitiesTransacted": 500, "price": 339.01},
+            {"filingDate": "2026-10-14", "transactionDate": "2026-10-13", "reportingName": "Ram Shriram",
+             "transactionType": "G-Gift", "securitiesTransacted": 86550, "price": 0},
+        ])
+        out = self.fmp.get_insider_transactions("GOOGL", "2026-10-26")
+        market = out.split("Other filings")[0]
+        self.assertIn("Arnold Frances", market)
+        self.assertNotIn("Pichai", market)
+        self.assertIn("F-InKind ×2, G-Gift ×1; 3 reporting person(s): Pichai Sundar, Porat Ruth, Ram Shriram", out)
+
     def test_company_profile_uses_yahoo_field_names(self):
         self.client.session.get.return_value = _response(payload=[
             {"companyName": "Apple Inc.", "sector": "Technology", "industry": "Consumer Electronics",
@@ -167,6 +200,37 @@ class FmpAdapterTest(unittest.TestCase):
         self.assertIn("Technology 100%", out)
         self.assertIn("United States 79.46%", out)
         self.assertIn("not applicable", self.fmp.get_income_statement("SMH", "quarterly", None))
+
+    def _company_payloads(self, days_ago, rows):
+        start = datetime.now() - timedelta(days=days_ago)
+        prices = [{"date": (start + timedelta(days=i)).strftime("%Y-%m-%d"), "adjOpen": 1, "adjHigh": 1,
+                   "adjLow": 1, "adjClose": 1, "volume": 1} for i in range(rows)]
+        return {
+            "profile": [{"companyName": "SK hynix Inc.", "currency": "USD", "price": 137.02,
+                         "range": "124.8-199.87"}],
+            "quote": [{"priceAvg50": 169.86, "priceAvg200": 164.29}],
+            "historical-price-eod/dividend-adjusted": prices,
+        }
+
+    def _fundamentals(self, payloads):
+        def fake_get(url, params=None, timeout=None):
+            return _response(payload=payloads.get(url.rsplit("/stable/", 1)[1], []))
+
+        self.client.session.get.side_effect = fake_get
+        self.fmp._etf_flags.clear()
+        return self.fmp.get_fundamentals("SKHY", None)
+
+    def test_short_price_history_blanks_long_averages(self):
+        first = (datetime.now() - timedelta(days=108)).strftime("%Y-%m-%d")
+        out = self._fundamentals(self._company_payloads(108, 75))
+        self.assertIn(f"200 Day Average: N/A (only 75 trading days of price history since {first})", out)
+        self.assertIn("50 Day Average: 169.86 USD", out)
+        self.assertIn(f"52 Week Range: 124.8-199.87 (since first trade {first}, not a full 52 weeks)", out)
+
+    def test_full_price_history_keeps_fmp_averages(self):
+        out = self._fundamentals(self._company_payloads(420, 300))
+        self.assertIn("200 Day Average: 164.29 USD", out)
+        self.assertIn("52 Week Range: 124.8-199.87\n", out)
 
 
 class DataSourceSelectionTest(unittest.TestCase):
